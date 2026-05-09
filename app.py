@@ -6,55 +6,98 @@ import datetime
 import pwlf
 from PIL import Image
 import os
+import plotly.graph_objects as go
 
-# 1. APP-LAYOUT & LOGO
+# 1. APP-LAYOUT & CSS (Spezifische Buttons Türkis)
 st.set_page_config(page_title="HYCYS - Laufauswertung", layout="wide")
 
-# Kopfzeile: Titel links, Logo rechts
+st.markdown("""
+    <style>
+    /* NUR den Primär-Button (Auswertung starten) türkis machen und zentrieren */
+    button[kind="primary"] {
+        background-color: #00a1e0 !important;
+        color: white !important;
+        border: none !important;
+        width: 100% !important;
+        font-weight: bold !important;
+    }
+    /* NUR den Upload-Button türkis machen */
+    [data-testid="stFileUploader"] button {
+        background-color: #00a1e0 !important;
+        color: white !important;
+        border: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Kopfzeile mit Logo
 col_title, col_logo = st.columns([4, 1])
 with col_title:
     st.title("HYCYS - Laufauswertung")
 with col_logo:
-    # Wir prüfen verschiedene mögliche Dateinamen für dein Logo
-    logo_file = "image_822d59.png" # Dein aktuell hochgeladenes Bild
-    if os.path.exists(logo_file):
-        st.image(logo_file, use_container_width=True)
-    elif os.path.exists("logo.png"):
-        st.image("logo.png", use_container_width=True)
+    logo_candidates = ["image_822d59.png", "logo.png", "image_828f70.png"]
+    for candidate in logo_candidates:
+        if os.path.exists(candidate):
+            st.image(candidate, use_container_width=True)
+            break
 
 st.markdown("---")
 
 # 2. SEITENLEISTE
 st.sidebar.header("Basisdaten")
-test_type = st.sidebar.selectbox("Testprotokoll", ["HYCYS Triathlon BLUE", "HYCYS Running BLUE"])
-start_v = st.sidebar.number_input("Startgeschwindigkeit (m/s)", value=2.9, step=0.1)
-anzahl = st.sidebar.number_input("Anzahl Stufen", value=8, min_value=3, max_value=20)
-ausbelastung = st.sidebar.checkbox("Test bis zur Ausbelastung", value=True)
+
+# Protokoll Auswahl
+test_type = st.sidebar.selectbox("Testprotokoll", ["HYCYS Triathlon BLUE", "HYCYS neue Laufauswertung"])
+
+# Dynamische Default-Werte basierend auf Protokoll
+if test_type == "HYCYS Triathlon BLUE":
+    def_start_v = 2.8
+    def_step_v = 0.4
+    def_anzahl = 4
+    def_dauer = 5.0
+elif test_type == "HYCYS neue Laufauswertung":
+    def_start_v = 2.8
+    def_step_v = 0.3
+    def_anzahl = 8
+    def_dauer = 3.0
+
+# User kann tippen oder +/- nutzen
+start_v = st.sidebar.number_input("Startgeschwindigkeit (m/s)", value=def_start_v, step=0.1)
+v_increment = st.sidebar.number_input("Geschwindigkeitssteigerung (m/s)", value=def_step_v, step=0.1)
+anzahl = st.sidebar.number_input("Anzahl Stufen", value=def_anzahl, min_value=1, max_value=20)
 
 st.sidebar.header("Protokoll-Setup")
-stufendauer = st.sidebar.number_input("Stufendauer (Minuten)", value=5.0, step=0.5)
+vorlauf = st.sidebar.number_input("Vorlaufzeit (Sekunden)", value=60, step=10)
+stufendauer = st.sidebar.number_input("Stufendauer (Minuten)", value=def_dauer, step=0.5)
 pausendauer = st.sidebar.number_input("Pausendauer (Sekunden)", value=30, step=5)
+ausbelastung = st.sidebar.checkbox("Test bis zur Ausbelastung", value=True)
 
-# Körperfett-Menü (Einklappbar)
+# Konstante Werte für die Berechnung (Zeitbasiert 120s)
+steady_fenster = 120
+
 with st.sidebar.expander("Körperfettmessung (Parizkova 10-Falten)"):
     sf_names = ["Wange", "Kinn", "Achselfalte vorn", "10. Rippe", "Bauch (Nabel)", "Spina illiaca", "Oberschenkel", "Rücken", "Triceps", "Wade"]
     df_sf = pd.DataFrame({"Falte": sf_names, "M1": [0.0]*10, "M2": [0.0]*10, "M3": [0.0]*10})
     edited_sf = st.data_editor(df_sf, hide_index=True, use_container_width=True)
 
 st.sidebar.header("Daten-Upload")
-uploaded_file = st.sidebar.file_uploader("Spirometrie-Datei hochladen (.xlsx oder .csv)", type=["xlsx", "csv"])
+st.sidebar.markdown("Hier muss die **10s** Datei der Spiro hochgeladen werden.")
+uploaded_file = st.sidebar.file_uploader("Datei auswählen (.xlsx oder .csv)", type=["xlsx", "csv"])
 
 st.sidebar.header("Stufentest Laktat")
 default_lac = [1.03, 1.09, 1.19, 1.42, 2.36, 2.32, 6.05, 9.48]
 default_hr = [123, 137, 145, 154, 164, 170, 177, 183]
-speeds = [start_v + (i * 0.3) for i in range(anzahl)]
+
+speeds = [start_v + (i * v_increment) for i in range(anzahl)]
 lac_values = [default_lac[i] if i < len(default_lac) else 0.0 for i in range(anzahl)]
 hr_values = [default_hr[i] if i < len(default_hr) else 100 for i in range(anzahl)]
+
 df_input = pd.DataFrame({"v (m/s)": np.round(speeds, 2), "Laktat": lac_values, "HF": hr_values})
 edited_df = st.sidebar.data_editor(df_input, disabled=["v (m/s)"], hide_index=True, use_container_width=True)
 
 st.sidebar.markdown("---")
-start_button = st.sidebar.button("Auswertung starten")
+# type="primary" wendet unser Türkis-CSS von oben an
+start_button = st.sidebar.button("Auswertung starten", type="primary")
 
 # --- HILFSFUNKTIONEN ---
 def parse_time_to_seconds(t):
@@ -72,18 +115,18 @@ def parse_time_to_seconds(t):
     return 0.0
 
 def calculate_vlamax_for_v(v_thresh, rel_vo2max, speed_arr, vo2_steady_arr):
-    if not (rel_vo2max > 0 and v_thresh > 0 and len(vo2_steady_arr) > 0): return None
+    if not (rel_vo2max > 0 and v_thresh > 0 and len(vo2_steady_arr) > 0): return None, None, None
     re_m_s_arr = [vo2 / v if (v > 0 and pd.notna(vo2) and vo2 > 0) else 0.0 for v, vo2 in zip(speed_arr, vo2_steady_arr)]
     re_at_thresh = np.interp(v_thresh, speed_arr, re_m_s_arr)
     rel_vo2_demand = re_at_thresh * v_thresh
     delta_vo2 = rel_vo2max - rel_vo2_demand
-    if delta_vo2 <= 0 or rel_vo2_demand <= 0: return None
+    if delta_vo2 <= 0 or rel_vo2_demand <= 0: return None, re_at_thresh, rel_vo2_demand
     ks1, ks2, la_eq, vol_dist = 0.0631, 1.3310, 0.02049, 0.4      
     vla_ox_max = (rel_vo2_demand * la_eq) / vol_dist
     adp = np.sqrt((ks1 * rel_vo2_demand) / delta_vo2)
     adp_3 = adp ** 3
     term2 = 1 + (ks2 / adp_3)
-    return (vla_ox_max * term2) / 60
+    return (vla_ox_max * term2) / 60, re_at_thresh, rel_vo2_demand
 
 # 3. BERECHNUNG & ANZEIGE
 if start_button:
@@ -93,14 +136,15 @@ if start_button:
     athlete_name, birthdate = "Unbekannt", "Unbekannt"
     weight, abs_vo2max, rel_vo2max, body_fat_pct = 0.0, 0.0, 0.0, 0.0
     vo2_steady_values = []
+    window_coords = []
     spiro_df = pd.DataFrame()
 
-    # Körperfett (Parizkova)
+    # Körperfett (Neue Formel)
     sf_means = edited_sf[["M1", "M2", "M3"]].mean(axis=1)
-    if sf_means.sum() > 0:
-        body_fat_pct = (39.572 * np.log10(sf_means.sum())) - 61.25
+    sum_sf = sf_means.sum()
+    if sum_sf > 0:
+        body_fat_pct = (22.32 * np.log10(sum_sf)) - 29.2
 
-    # Spiro-Daten einlesen
     if uploaded_file is not None:
         try:
             df_excel = pd.read_csv(uploaded_file, header=None, low_memory=False) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, header=None)
@@ -119,16 +163,19 @@ if start_button:
             if not spiro_df.empty:
                 abs_vo2max = spiro_df['VO2'].rolling(window=3, center=True).mean().max()
                 rel_vo2max = abs_vo2max / weight if weight > 0 else 0
+                
                 stage_sec = int(stufendauer * 60)
                 pause_sec = int(pausendauer)
                 for i in range(anzahl):
-                    end_t = 60 + (i + 1) * stage_sec + i * pause_sec
-                    mask = (spiro_df['Time'] >= end_t - 60) & (spiro_df['Time'] <= end_t)
+                    end_t = vorlauf + (i + 1) * stage_sec + i * pause_sec
+                    start_t = end_t - steady_fenster
+                    mask = (spiro_df['Time'] >= start_t) & (spiro_df['Time'] <= end_t)
+                    window_coords.append((start_t, end_t))
                     vo2_steady_values.append(spiro_df.loc[mask, 'VO2'].mean() / weight if not spiro_df.loc[mask].empty else 0)
         except Exception as e:
             st.error(f"Fehler beim Einlesen: {e}")
 
-    # Schwellenberechnung
+    # Schwellen
     poly_coeffs = np.polyfit(speed, lactate, 3)
     poly_func = np.poly1d(poly_coeffs)
     v_start, v_end = speed[0], speed[-1]
@@ -165,18 +212,40 @@ if start_button:
 
     # Multi-VLamax
     for res in results:
-        res['VLamax'] = calculate_vlamax_for_v(res['v'], rel_vo2max, speed, vo2_steady_values)
+        res['VLamax'], _, _ = calculate_vlamax_for_v(res['v'], rel_vo2max, speed, vo2_steady_values)
 
-    # Header-Metriken
-    st.subheader(f"Athlet: {athlete_name} | Geburtsdatum: {birthdate} | Protokoll: {test_type}")
+    # Header-Metriken & Körperfett-Tacho
+    st.subheader(f"Athlet: {athlete_name} | Protokoll: {test_type}")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Gewicht", f"{weight} kg")
-    m2.metric("Körperfett", f"{max(0, body_fat_pct):.1f} %")
     m3.metric("VO2max (rel)", f"{rel_vo2max:.1f} ml/min/kg")
     m4.metric("Stufenanzahl", f"{anzahl}")
+    
+    with m2:
+        # Erstellung des Plotly-Tachometers für Körperfett in HYCYS-Türkis
+        fig_bf = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = max(0, body_fat_pct),
+            number = {'suffix': "%", 'valueformat': ".1f", 'font': {'color': '#00a1e0', 'size': 30}},
+            title = {'text': "Körperfett", 'font': {'size': 14}},
+            gauge = {
+                'axis': {'range': [0, 30], 'tickwidth': 1, 'tickcolor': "darkblue"},
+                'bar': {'color': "#00a1e0"},
+                'bgcolor': "white",
+                'borderwidth': 2,
+                'bordercolor': "gray",
+                'steps': [
+                    {'range': [0, 10], 'color': "rgba(0, 161, 224, 0.1)"},
+                    {'range': [10, 20], 'color': "rgba(0, 161, 224, 0.3)"},
+                    {'range': [20, 30], 'color': "rgba(0, 161, 224, 0.5)"}],
+            }
+        ))
+        fig_bf.update_layout(height=150, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig_bf, use_container_width=True)
+
     st.markdown("---")
 
-    # Ergebnisanzeige
+    # Ergebnisanzeige Matrix
     df_res = pd.DataFrame(results)
     if not df_res.empty:
         df_res['km/h'] = (df_res['v'] * 3.6).round(1)
@@ -200,21 +269,33 @@ if start_button:
             ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
             st.pyplot(fig)
 
-    # Stufenauswertung
-    if not spiro_df.empty:
-        st.markdown("---")
-        st.subheader("Stufenauswertung (Steady State letzte Minute)")
-        step_data = []
-        rest_mask = (spiro_df['Time'] >= 0) & (spiro_df['Time'] <= 60)
-        step_data.append({"Stufe": "Ruhe", "km/h": 0.0, "VO2 (ml/min)": spiro_df.loc[rest_mask, 'VO2'].mean(), "VCO2 (ml/min)": spiro_df.loc[rest_mask, 'VCO2'].mean(), "RE (ml/kg/km)": None})
+    # EXPERTEN TOOLS
+    st.markdown("---")
+    with st.expander("Experten Tools zum Vergleich mit einer bestehenden HYCYS Diagnostik"):
+        if not spiro_df.empty:
+            st.subheader("Spiro-Synchronisation & Rohdaten")
+            fig2, ax2 = plt.subplots(figsize=(12, 4))
+            ax2.plot(spiro_df['Time'], spiro_df['VO2'], color='gray', alpha=0.5)
+            for i, (s_t, e_t) in enumerate(window_coords):
+                ax2.axvspan(s_t, e_t, color='#00a1e0', alpha=0.3)
+            st.pyplot(fig2)
+            
+            col_diag1, col_diag2 = st.columns(2)
+            with col_diag1:
+                st.write("**Metabolische Vergleichswerte:**")
+                st.write(f"- Berechnete VO2max: {rel_vo2max:.2f} ml/min/kg")
+            with col_diag2:
+                st.write("**Stufen-VO2 (relativ):**")
+                st.dataframe(pd.DataFrame({"Stufe": [f"S{i+1}" for i in range(anzahl)], "VO2 rel": [f"{v:.2f}" for v in vo2_steady_values]}), hide_index=True)
         
-        stage_sec = int(stufendauer * 60)
-        pause_sec = int(pausendauer)
-        for i in range(anzahl):
-            end_t = 60 + (i + 1) * stage_sec + i * pause_sec
-            mask = (spiro_df['Time'] >= end_t - 60) & (spiro_df['Time'] <= end_t)
-            vo2 = spiro_df.loc[mask, 'VO2'].mean() if not spiro_df.loc[mask].empty else 0
-            v_kmh = speed[i] * 3.6
-            re = (vo2 / weight) / (v_kmh / 60) if (weight > 0 and v_kmh > 0 and vo2 > 0) else None
-            step_data.append({"Stufe": f"{i+1}", "km/h": v_kmh, "VO2 (ml/min)": vo2, "VCO2 (ml/min)": spiro_df.loc[mask, 'VCO2'].mean() if not spiro_df.loc[mask].empty else 0, "RE (ml/kg/km)": re})
-        st.dataframe(pd.DataFrame(step_data).style.format({"km/h": "{:.1f}", "VO2 (ml/min)": "{:.0f}", "VCO2 (ml/min)": "{:.0f}", "RE (ml/kg/km)": "{:.1f}"}), use_container_width=True, hide_index=True)
+        st.subheader("Stufenauswertung")
+        if not spiro_df.empty:
+            step_data = []
+            for i in range(anzahl):
+                end_t = vorlauf + (i + 1) * stage_sec + i * pause_sec
+                mask = (spiro_df['Time'] >= end_t - 60) & (spiro_df['Time'] <= end_t)
+                vo2 = spiro_df.loc[mask, 'VO2'].mean() if not spiro_df.loc[mask].empty else 0
+                v_kmh = speed[i] * 3.6
+                re = (vo2 / weight) / (v_kmh / 60) if weight > 0 and v_kmh > 0 else 0
+                step_data.append({"Stufe": f"{i+1}", "km/h": v_kmh, "VO2": vo2, "RE": re})
+            st.dataframe(pd.DataFrame(step_data), hide_index=True)
