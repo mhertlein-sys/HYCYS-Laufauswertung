@@ -67,7 +67,7 @@ v_increment = st.sidebar.number_input("Geschwindigkeitssteigerung (m/s)", value=
 anzahl = st.sidebar.number_input("Anzahl Stufen", value=def_anzahl, min_value=1, max_value=20)
 
 st.sidebar.header("Protokoll-Setup")
-vorlauf = st.sidebar.number_input("Vorlaufzeit (Sekunden)", value=60, step=10)
+vorlauf = st.sidebar.number_input("Ruhemessung (Sekunden)", value=60, step=10)
 stufendauer = st.sidebar.number_input("Stufendauer (Minuten)", value=def_dauer, step=0.5)
 pausendauer = st.sidebar.number_input("Pausendauer (Sekunden)", value=30, step=5)
 ausbelastung = st.sidebar.checkbox("Test bis zur Ausbelastung", value=True)
