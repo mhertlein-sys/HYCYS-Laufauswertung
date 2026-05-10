@@ -67,7 +67,7 @@ v_increment = st.sidebar.number_input("Geschwindigkeitssteigerung (m/s)", value=
 anzahl = st.sidebar.number_input("Anzahl Stufen", value=def_anzahl, min_value=1, max_value=20)
 
 st.sidebar.header("Protokoll-Setup")
-vorlauf = st.sidebar.number_input("Ruhemessung (Sekunden)", value=60, step=10)
+vorlauf = st.sidebar.number_input("Vorlaufzeit (Sekunden)", value=60, step=10)
 stufendauer = st.sidebar.number_input("Stufendauer (Minuten)", value=def_dauer, step=0.5)
 pausendauer = st.sidebar.number_input("Pausendauer (Sekunden)", value=30, step=5)
 ausbelastung = st.sidebar.checkbox("Test bis zur Ausbelastung", value=True)
@@ -96,7 +96,6 @@ df_input = pd.DataFrame({"v (m/s)": np.round(speeds, 2), "Laktat": lac_values, "
 edited_df = st.sidebar.data_editor(df_input, disabled=["v (m/s)"], hide_index=True, use_container_width=True)
 
 st.sidebar.markdown("---")
-# type="primary" wendet unser Türkis-CSS von oben an
 start_button = st.sidebar.button("Auswertung starten", type="primary")
 
 # --- HILFSFUNKTIONEN ---
@@ -133,7 +132,7 @@ if start_button:
     speed = edited_df["v (m/s)"].values
     lactate = edited_df["Laktat"].values
     hr = edited_df["HF"].values
-    athlete_name, birthdate = "Unbekannt", "Unbekannt"
+    athlete_name, birthdate, test_date = "Unbekannt", "Unbekannt", "Unbekannt"
     weight, abs_vo2max, rel_vo2max, body_fat_pct = 0.0, 0.0, 0.0, 0.0
     vo2_steady_values = []
     window_coords = []
@@ -150,10 +149,21 @@ if start_button:
             df_excel = pd.read_csv(uploaded_file, header=None, low_memory=False) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, header=None)
             athlete_name = f"{df_excel.iloc[2, 1]} {df_excel.iloc[1, 1]}" 
             weight = float(df_excel.iloc[6, 1]) 
+            
+            # Geburtsdatum
             raw_date = df_excel.iloc[7, 1] 
             if pd.notna(raw_date):
                 date_str = str(int(float(raw_date))).zfill(8)
                 birthdate = f"{date_str[:2]}.{date_str[2:4]}.{date_str[4:]}"
+                
+            # Test-Datum aus E1 (Zeile 0, Spalte 4)
+            raw_test_date = df_excel.iloc[0, 4]
+            if pd.notna(raw_test_date):
+                try:
+                    t_date_str = str(int(float(raw_test_date))).zfill(8)
+                    test_date = f"{t_date_str[:2]}.{t_date_str[2:4]}.{t_date_str[4:]}"
+                except:
+                    test_date = str(raw_test_date)
             
             times_sec = df_excel.iloc[3:, 9].apply(parse_time_to_seconds)
             vo2_col = pd.to_numeric(df_excel.iloc[3:, 13], errors='coerce')
@@ -175,11 +185,10 @@ if start_button:
         except Exception as e:
             st.error(f"Fehler beim Einlesen: {e}")
 
-    # Schwellen
+    # --- SCHWELLENBERECHNUNG ---
     poly_coeffs = np.polyfit(speed, lactate, 3)
     poly_func = np.poly1d(poly_coeffs)
     v_start, v_end = speed[0], speed[-1]
-    lac_start, lac_end = poly_func(v_start), poly_func(v_end)
     results = []
 
     def get_speed_at_lac(target):
@@ -187,42 +196,73 @@ if start_button:
         roots = [r.real for r in np.roots(s_coeffs) if np.isreal(r) and v_start <= r.real <= v_end]
         return roots[0] if roots else None
 
-    v_40 = get_speed_at_lac(4.0)
-    if v_40: results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': v_40, 'Laktat': 4.0})
+    # 1. OBLA 4.0
+    v_exact_40 = get_speed_at_lac(4.0)
+    if v_exact_40: results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': round(v_exact_40, 1), 'Laktat': 4.0})
     
     deriv = np.polyder(poly_coeffs)
-    m_dmax = (lac_end - lac_start) / (v_end - v_start)
-    deriv_dmax = deriv.copy(); deriv_dmax[-1] -= m_dmax
-    d_roots = [r.real for r in np.roots(deriv_dmax) if np.isreal(r) and (v_start-0.1) <= r.real <= (v_end+0.1)]
-    if d_roots: results.append({'Modell': 'Dmax (Standard)', 'v': max(v_start, min(v_end, d_roots[0])), 'Laktat': poly_func(max(v_start, min(v_end, d_roots[0])))})
+    
+    # 2. Dmax Standard
+    m_dmax = (lactate[-1] - lactate[0]) / (v_end - v_start)
+    deriv_dmax = deriv.copy()
+    deriv_dmax[-1] -= m_dmax
+    d_roots = [r.real for r in np.roots(deriv_dmax) if np.isreal(r) and v_start <= r.real <= v_end]
+    if d_roots: 
+        v_exact_dmax = max(v_start, min(v_end, d_roots[0]))
+        results.append({'Modell': 'Dmax (Standard)', 'v': round(v_exact_dmax, 1), 'Laktat': poly_func(v_exact_dmax)})
 
-    th = np.min(lactate) + 0.4
-    idx_a = np.where(lactate > th)[0]
-    v_ms = speed[max(0, idx_a[0]-1)] if len(idx_a) > 0 else v_start
-    m_m = (lac_end - poly_func(v_ms)) / (v_end - v_ms)
-    deriv_mod = deriv.copy(); deriv_mod[-1] -= m_m
-    m_roots = [r.real for r in np.roots(deriv_mod) if np.isreal(r) and (v_ms-0.1) <= r.real <= (v_end+0.1)]
-    if m_roots: results.append({'Modell': 'Modified Dmax', 'v': max(v_ms, min(v_end, m_roots[0])), 'Laktat': poly_func(max(v_ms, min(v_end, m_roots[0])))})
+    # 3. Modified Dmax 
+    base_lac = np.min(lactate) 
+    idx_rise = np.where(lactate >= base_lac + 0.4)[0]
+    idx_mod_start = max(0, idx_rise[0] - 1) if len(idx_rise) > 0 else 0
+    v_mod_start = speed[idx_mod_start]
+    
+    if v_mod_start < v_end:
+        m_mod = (lactate[-1] - lactate[idx_mod_start]) / (v_end - v_mod_start)
+        deriv_mod = deriv.copy()
+        deriv_mod[-1] -= m_mod
+        m_roots = [r.real for r in np.roots(deriv_mod) if np.isreal(r) and v_mod_start <= r.real <= v_end]
+        if m_roots: 
+            v_exact_mod = max(v_mod_start, min(v_end, m_roots[0]))
+            results.append({'Modell': 'Modified Dmax', 'v': round(v_exact_mod, 1), 'Laktat': poly_func(v_exact_mod)})
 
+    # 4. LTP1 & LTP2 (GEFIXT: Globale Suche & Laktat auf der Geraden ablesen)
     try:
-        bps = pwlf.PiecewiseLinFit(speed, lactate).fit(3)
-        for i, name in enumerate(['LTP1', 'LTP2']):
-            if v_start <= bps[i+1] <= v_end: results.append({'Modell': name, 'v': bps[i+1], 'Laktat': poly_func(bps[i+1])})
+        my_pwlf = pwlf.PiecewiseLinFit(speed, lactate)
+        # Zurück zur globalen Suche (fit(3)), um nicht in steilen Kurven hängenzubleiben
+        bps = my_pwlf.fit(3)
+        if len(bps) >= 3:
+            if v_start <= bps[1] <= v_end: 
+                v_exact_ltp1 = bps[1]
+                # Laktat direkt von der Knick-Geraden ablesen, nicht vom Polynom
+                lac_ltp1 = my_pwlf.predict([v_exact_ltp1])[0] 
+                results.append({'Modell': 'LTP1', 'v': round(v_exact_ltp1, 1), 'Laktat': lac_ltp1})
+            if len(bps) == 4 and v_start <= bps[2] <= v_end: 
+                v_exact_ltp2 = bps[2]
+                # Laktat direkt von der Knick-Geraden ablesen, nicht vom Polynom
+                lac_ltp2 = my_pwlf.predict([v_exact_ltp2])[0]
+                results.append({'Modell': 'LTP2', 'v': round(v_exact_ltp2, 1), 'Laktat': lac_ltp2})
     except: pass
 
     # Multi-VLamax
     for res in results:
         res['VLamax'], _, _ = calculate_vlamax_for_v(res['v'], rel_vo2max, speed, vo2_steady_values)
 
-    # Header-Metriken & Körperfett-Tacho
-    st.subheader(f"Athlet: {athlete_name} | Protokoll: {test_type}")
+    # Header-Metriken & Körperfett-Tacho (Angepasste Formatierung)
+    st.markdown(f"""
+        <div style="font-size: 16px; line-height: 1.5; margin-bottom: 20px;">
+            <b>Athlet:</b> {athlete_name}<br>
+            <b>Protokoll:</b> {test_type}<br>
+            <b>Test-Datum:</b> {test_date}
+        </div>
+        """, unsafe_allow_html=True)
+        
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Gewicht", f"{weight} kg")
     m3.metric("VO2max (rel)", f"{rel_vo2max:.1f} ml/min/kg")
     m4.metric("Stufenanzahl", f"{anzahl}")
     
     with m2:
-        # Erstellung des Plotly-Tachometers für Körperfett in HYCYS-Türkis
         fig_bf = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = max(0, body_fat_pct),
@@ -248,15 +288,16 @@ if start_button:
     # Ergebnisanzeige Matrix
     df_res = pd.DataFrame(results)
     if not df_res.empty:
+        df_res['m/s'] = df_res['v'].round(2)
         df_res['km/h'] = (df_res['v'] * 3.6).round(1)
         df_res['HF'] = np.interp(df_res['v'], speed, hr).round(0).astype(int)
         df_res['Laktat'] = df_res['Laktat'].round(2)
-        df_res['VLamax [mmol/l/s]'] = df_res['VLamax'].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
+        df_res['VLamax [mmol/l/s]'] = df_res['VLamax'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
         
         c1, c2 = st.columns([1, 1])
         with c1:
             st.subheader("Schwellen & VLamax Matrix")
-            st.dataframe(df_res[['Modell', 'km/h', 'Laktat', 'HF', 'VLamax [mmol/l/s]']], hide_index=True, use_container_width=True)
+            st.dataframe(df_res[['Modell', 'm/s', 'km/h', 'Laktat', 'HF', 'VLamax [mmol/l/s]']], hide_index=True, use_container_width=True)
         with c2:
             fig, ax = plt.subplots(figsize=(8, 4))
             v_smooth = np.linspace(v_start, v_end, 200)
