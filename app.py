@@ -138,7 +138,7 @@ if start_button:
     window_coords = []
     spiro_df = pd.DataFrame()
 
-    # Körperfett (Neue Formel)
+    # Körperfett
     sf_means = edited_sf[["M1", "M2", "M3"]].mean(axis=1)
     sum_sf = sf_means.sum()
     if sum_sf > 0:
@@ -150,13 +150,11 @@ if start_button:
             athlete_name = f"{df_excel.iloc[2, 1]} {df_excel.iloc[1, 1]}" 
             weight = float(df_excel.iloc[6, 1]) 
             
-            # Geburtsdatum
             raw_date = df_excel.iloc[7, 1] 
             if pd.notna(raw_date):
                 date_str = str(int(float(raw_date))).zfill(8)
                 birthdate = f"{date_str[:2]}.{date_str[2:4]}.{date_str[4:]}"
                 
-            # Test-Datum aus E1 (Zeile 0, Spalte 4)
             raw_test_date = df_excel.iloc[0, 4]
             if pd.notna(raw_test_date):
                 try:
@@ -192,13 +190,20 @@ if start_button:
     results = []
 
     def get_speed_at_lac(target):
-        s_coeffs = poly_coeffs.copy(); s_coeffs[-1] -= target
+        s_coeffs = poly_coeffs.copy()
+        s_coeffs[-1] -= target
         roots = [r.real for r in np.roots(s_coeffs) if np.isreal(r) and v_start <= r.real <= v_end]
         return roots[0] if roots else None
 
     # 1. OBLA 4.0
-    v_exact_40 = get_speed_at_lac(4.0)
-    if v_exact_40: results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': round(v_exact_40, 1), 'Laktat': 4.0})
+    if np.max(lactate) < 4.0:
+        results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': 'Laktatwerte zu niedrig um OBLA zu kalkulieren', 'Laktat': None})
+    else:
+        v_exact_40 = get_speed_at_lac(4.0)
+        if v_exact_40: 
+            results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': round(v_exact_40, 1), 'Laktat': 4.0})
+        else:
+            results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': 'Laktatwerte zu niedrig um OBLA zu kalkulieren', 'Laktat': None})
     
     deriv = np.polyder(poly_coeffs)
     
@@ -212,43 +217,39 @@ if start_button:
         results.append({'Modell': 'Dmax (Standard)', 'v': round(v_exact_dmax, 1), 'Laktat': poly_func(v_exact_dmax)})
 
     # 3. Modified Dmax 
-    base_lac = np.min(lactate) 
-    idx_rise = np.where(lactate >= base_lac + 0.4)[0]
-    idx_mod_start = max(0, idx_rise[0] - 1) if len(idx_rise) > 0 else 0
-    v_mod_start = speed[idx_mod_start]
-    
-    if v_mod_start < v_end:
-        m_mod = (lactate[-1] - lactate[idx_mod_start]) / (v_end - v_mod_start)
-        deriv_mod = deriv.copy()
-        deriv_mod[-1] -= m_mod
-        m_roots = [r.real for r in np.roots(deriv_mod) if np.isreal(r) and v_mod_start <= r.real <= v_end]
-        if m_roots: 
-            v_exact_mod = max(v_mod_start, min(v_end, m_roots[0]))
-            results.append({'Modell': 'Modified Dmax', 'v': round(v_exact_mod, 1), 'Laktat': poly_func(v_exact_mod)})
+    if not ausbelastung:
+        results.append({'Modell': 'Modified Dmax', 'v': 'Aufgrund fehlender Ausbelastung keine Kalkulation der ModDmax möglich', 'Laktat': None})
+    else:
+        base_lac = np.min(lactate) 
+        idx_rise = np.where(lactate >= base_lac + 0.4)[0]
+        idx_mod_start = max(0, idx_rise[0] - 1) if len(idx_rise) > 0 else 0
+        v_mod_start = speed[idx_mod_start]
+        
+        if v_mod_start < v_end:
+            m_mod = (lactate[-1] - lactate[idx_mod_start]) / (v_end - v_mod_start)
+            deriv_mod = deriv.copy()
+            deriv_mod[-1] -= m_mod
+            m_roots = [r.real for r in np.roots(deriv_mod) if np.isreal(r) and v_mod_start <= r.real <= v_end]
+            if m_roots: 
+                v_exact_mod = max(v_mod_start, min(v_end, m_roots[0]))
+                results.append({'Modell': 'Modified Dmax', 'v': round(v_exact_mod, 1), 'Laktat': poly_func(v_exact_mod)})
 
-    # 4. LTP1 & LTP2 (GEFIXT: Globale Suche & Laktat auf der Geraden ablesen)
+    # 4. LTP1 & LTP2 
     try:
         my_pwlf = pwlf.PiecewiseLinFit(speed, lactate)
-        # Zurück zur globalen Suche (fit(3)), um nicht in steilen Kurven hängenzubleiben
         bps = my_pwlf.fit(3)
         if len(bps) >= 3:
             if v_start <= bps[1] <= v_end: 
                 v_exact_ltp1 = bps[1]
-                # Laktat direkt von der Knick-Geraden ablesen, nicht vom Polynom
                 lac_ltp1 = my_pwlf.predict([v_exact_ltp1])[0] 
                 results.append({'Modell': 'LTP1', 'v': round(v_exact_ltp1, 1), 'Laktat': lac_ltp1})
             if len(bps) == 4 and v_start <= bps[2] <= v_end: 
                 v_exact_ltp2 = bps[2]
-                # Laktat direkt von der Knick-Geraden ablesen, nicht vom Polynom
                 lac_ltp2 = my_pwlf.predict([v_exact_ltp2])[0]
                 results.append({'Modell': 'LTP2', 'v': round(v_exact_ltp2, 1), 'Laktat': lac_ltp2})
     except: pass
 
-    # Multi-VLamax
-    for res in results:
-        res['VLamax'], _, _ = calculate_vlamax_for_v(res['v'], rel_vo2max, speed, vo2_steady_values)
-
-    # Header-Metriken & Körperfett-Tacho (Angepasste Formatierung)
+    # Header-Metriken & Körperfett-Tacho
     st.markdown(f"""
         <div style="font-size: 16px; line-height: 1.5; margin-bottom: 20px;">
             <b>Athlet:</b> {athlete_name}<br>
@@ -285,15 +286,37 @@ if start_button:
 
     st.markdown("---")
 
-    # Ergebnisanzeige Matrix
-    df_res = pd.DataFrame(results)
-    if not df_res.empty:
-        df_res['m/s'] = df_res['v'].round(2)
-        df_res['km/h'] = (df_res['v'] * 3.6).round(1)
-        df_res['HF'] = np.interp(df_res['v'], speed, hr).round(0).astype(int)
-        df_res['Laktat'] = df_res['Laktat'].round(2)
-        df_res['VLamax [mmol/l/s]'] = df_res['VLamax'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
+    # Ergebnisanzeige Matrix aufbauen mit Error-Handling
+    df_res_list = []
+    for res in results:
+        row = {'Modell': res['Modell'], 'v': res['v']}
         
+        # Wenn v ein Fehler-String ist
+        if isinstance(res['v'], str):
+            row['m/s'] = res['v']
+            row['km/h'] = ""
+            row['Laktat'] = ""
+            row['HF'] = ""
+            row['VLamax [mmol/l/s]'] = ""
+        # Normaler Fall
+        else:
+            row['m/s'] = round(res['v'], 2)
+            row['km/h'] = round(res['v'] * 3.6, 1)
+            row['Laktat'] = round(res['Laktat'], 2)
+            row['HF'] = int(round(np.interp(res['v'], speed, hr), 0))
+            
+            # VLamax Fehler-Handling
+            if uploaded_file is None:
+                row['VLamax [mmol/l/s]'] = "Bitte lade eine Spirodatei hoch damit eine Vlamax kalkuliert werden kann"
+            else:
+                vla, _, _ = calculate_vlamax_for_v(res['v'], rel_vo2max, speed, vo2_steady_values)
+                row['VLamax [mmol/l/s]'] = f"{vla:.2f}" if vla is not None else "N/A"
+                
+        df_res_list.append(row)
+
+    df_res = pd.DataFrame(df_res_list)
+
+    if not df_res.empty:
         c1, c2 = st.columns([1, 1])
         with c1:
             st.subheader("Schwellen & VLamax Matrix")
@@ -303,8 +326,12 @@ if start_button:
             v_smooth = np.linspace(v_start, v_end, 200)
             ax.plot(speed, lactate, 'ko', label='Messwerte')
             ax.plot(v_smooth, poly_func(v_smooth), color='#00a1e0', label='Laktatkurve')
+            
+            # Fehler-Strings beim Plotten überspringen
             for _, r in df_res.iterrows():
-                ax.plot(r['v'], r['Laktat'], 'X', markersize=8, label=r['Modell'])
+                if isinstance(r['v'], (int, float, np.number)):
+                    ax.plot(r['v'], r['Laktat'], 'X', markersize=8, label=r['Modell'])
+                    
             ax.set_xlabel("Geschwindigkeit (m/s)")
             ax.set_ylabel("Laktat (mmol/L)")
             ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
