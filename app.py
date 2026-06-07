@@ -33,22 +33,26 @@ def parse_sprint_excel(file_contents):
     
     sprint_powers = []
     sprint_times = []
+    sprint_cadences = []
     
     for r in range(1, sheet.max_row + 1):
         val_a = sheet.cell(row=r, column=1).value
+        val_c = sheet.cell(row=r, column=3).value
         val_e = sheet.cell(row=r, column=5).value
         
         if val_a is not None and val_e is not None:
             try:
                 p = float(val_a)
                 t = parse_time_to_seconds(val_e)
+                c = float(val_c) if val_c is not None else 0.0
                 if t is not None:
                     sprint_powers.append(p)
                     sprint_times.append(t)
+                    sprint_cadences.append(c)
             except ValueError:
                 continue
                 
-    return sprint_powers, sprint_times
+    return sprint_powers, sprint_times, sprint_cadences
 
 
 # TEMPORARY SRM DUMP
@@ -63,6 +67,10 @@ if os.path.exists(srm_file_path):
             hex_str = " ".join(f"{b:02x}" for b in chunk)
             ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
             out.write(f"{i:04x} | {hex_str:<47} | {ascii_str}\n")
+
+# Import PDF generator from dedicated module
+from pdf_rad import create_pdf_rad
+
 
 # 1. APP-LAYOUT & CSS
 st.set_page_config(page_title="HYCYS - Diagnostik", layout="wide")
@@ -320,7 +328,7 @@ elif sportart == "Radsport":
     if uploaded_srm is not None and uploaded_srm.name != st.session_state.get("last_uploaded_srm"):
         st.session_state.last_uploaded_srm = uploaded_srm.name
         try:
-            sprint_powers, sprint_times = parse_sprint_excel(uploaded_srm)
+            sprint_powers, sprint_times, sprint_cadences = parse_sprint_excel(uploaded_srm)
             if len(sprint_powers) > 0:
                 p_max = max(sprint_powers)
                 t_pmax_list = [t for p, t in zip(sprint_powers, sprint_times) if p == p_max]
@@ -345,6 +353,7 @@ elif sportart == "Radsport":
                 st.session_state.t_glyc = round(t_bel - t_alak, 1)
                 st.session_state.sprint_powers = sprint_powers
                 st.session_state.sprint_times = sprint_times
+                st.session_state.sprint_cadences = sprint_cadences
                 st.session_state.rad_auswertung_gestartet = False
                 st.rerun()
         except Exception as e:
@@ -352,8 +361,12 @@ elif sportart == "Radsport":
 
 
     # --- Sprint .srm oder .fit Datei hochladen ---
-    st.sidebar.markdown("**Sprint .srm / .fit hochladen**")
-    
+    st.sidebar.markdown("**Sprint .srm / .fit hochladen** *(Aktuell noch in der Testphase)*")
+    st.sidebar.caption(
+        "Optional: Wird keine Rohdatei hochgeladen, muss mindestens eine Sprint-Excel-Datei "
+        "(.xlsx) vorhanden sein."
+    )
+
     # Slope und Zero-Offset Eingabe (für SRM-Kalibrierung)
     with st.sidebar.expander("SRM Kalibrierung (Slope / Zero-Offset)", expanded=False):
         st.caption("Diese Werte stehen auf dem SRM PowerControl oder im SRM-Protokoll.")
@@ -409,6 +422,7 @@ elif sportart == "Radsport":
             if _records:
                 _sprint_powers = [float(r.get("power_w", r.get("power", 0))) for r in _records]
                 _sprint_times  = [float(r["elapsed_s"]) for r in _records]
+                _sprint_cadences = [float(r.get("cadence", 0)) for r in _records]
                 
                 _p_max = max(_sprint_powers)
                 _t_pmax_list = [t for p, t in zip(_sprint_powers, _sprint_times) if p == _p_max]
@@ -433,6 +447,7 @@ elif sportart == "Radsport":
                 st.session_state.t_glyc  = round(_t_bel - _t_alak, 1)
                 st.session_state.sprint_powers  = _sprint_powers
                 st.session_state.sprint_times   = _sprint_times
+                st.session_state.sprint_cadences = _sprint_cadences
                 st.session_state.sprint_records = _records   # für Excel-Download
                 st.session_state.sprint_rec_int_label = _rec_int_label
                 st.session_state.sprint_src_name = _src_name
@@ -612,39 +627,7 @@ elif sportart == "Radsport":
         if sum_sf > 0:
             calculated_bf = (22.32 * np.log10(sum_sf)) - 29.2
             st.session_state.body_fat_pct = max(0.0, round(calculated_bf, 1))
-
-    # 1. Basisdaten Expander (Default collapsed)
-    with st.sidebar.expander("Basisdaten", expanded=False):
-        athlete_name = st.text_input("Name", value=st.session_state.athlete_name)
-        st.session_state.athlete_name = athlete_name
-
-        birthdate = st.text_input("Geburtsdatum", value=st.session_state.birthdate)
-        st.session_state.birthdate = birthdate
-
-        test_date = st.text_input("Testdatum", value=st.session_state.test_date)
-        st.session_state.test_date = test_date
-
-        height = st.number_input("Größe (cm)", value=int(st.session_state.height), step=1, format="%d")
-        st.session_state.height = height
-
-        weight = st.number_input("Gewicht (kg)", value=float(st.session_state.weight), step=0.1, format="%.1f")
-        st.session_state.weight = round(weight, 1)
-
-        body_fat_pct = st.number_input("Körperfett (%)", value=float(st.session_state.body_fat_pct), step=0.1, format="%.1f")
-        st.session_state.body_fat_pct = round(body_fat_pct, 1)
-
-        coach_val = st.session_state.coach
-        if coach_val not in coach_options:
-            coach_options = coach_options + [coach_val]
-        coach = st.selectbox("Coach", options=coach_options, index=coach_options.index(coach_val))
-        st.session_state.coach = coach
-
-        kategorie_val = st.session_state.kategorie
-        if kategorie_val not in kategorie_options:
-            kategorie_options = kategorie_options + [kategorie_val]
-        kategorie = st.selectbox("Kategorie", options=kategorie_options, index=kategorie_options.index(kategorie_val))
-        st.session_state.kategorie = kategorie
-        
+            
     with st.sidebar.form("cycling_form", enter_to_submit=False):
         # 1. Basisdaten Expander (Default collapsed)
         with st.expander("Basisdaten", expanded=False):
@@ -799,6 +782,27 @@ elif sportart == "Radsport":
             carb_intake_factor_input = st.number_input("KH-Zufuhr Faktor [g/kg KG/h]", value=float(st.session_state.carb_intake_factor), step=0.1, format="%.1f")
             st.session_state.carb_intake_factor = round(carb_intake_factor_input, 1)
             carb_intake_factor = float(st.session_state.carb_intake_factor)
+
+        # 4. Coaching Potential Overrides (Default collapsed)
+        with st.expander("Coaching Potential Overrides", expanded=False):
+            st.caption("Optional: Werte für das Coaching-Potential-Spinnennetz auf Seite 4 des Berichts.")
+            pot_vo2max = st.number_input("Potential VO2max rel. [ml/min/kg]", value=float(st.session_state.get("pot_vo2max", 72.0)), step=0.5)
+            pot_fat = st.number_input("Potential Fettanteil [%]", value=float(st.session_state.get("pot_fat", 10.5)), step=0.1)
+            pot_ans_abs = st.number_input("Potential ANS abs. [W]", value=float(st.session_state.get("pot_ans_abs", 295.0)), step=5.0)
+            pot_ans_rel = st.number_input("Potential ANS rel. [W/kg]", value=float(st.session_state.get("pot_ans_rel", 4.8)), step=0.1)
+            pot_fatmax = st.number_input("Potential Fatmax [W/kg]", value=float(st.session_state.get("pot_fatmax", 3.4)), step=0.1)
+            pot_pmax = st.number_input("Potential Max. Leistung [W/kg]", value=float(st.session_state.get("pot_pmax", 14.5)), step=0.1)
+            pot_match = st.number_input("Potential KH-Match [W/kg]", value=float(st.session_state.get("pot_match", 3.6)), step=0.1)
+            pot_vlamax = st.number_input("Potential VLamax [mmol/L/s]", value=float(st.session_state.get("pot_vlamax", 0.45)), step=0.01)
+            
+            st.session_state.pot_vo2max = pot_vo2max
+            st.session_state.pot_fat = pot_fat
+            st.session_state.pot_ans_abs = pot_ans_abs
+            st.session_state.pot_ans_rel = pot_ans_rel
+            st.session_state.pot_fatmax = pot_fatmax
+            st.session_state.pot_pmax = pot_pmax
+            st.session_state.pot_match = pot_match
+            st.session_state.pot_vlamax = pot_vlamax
 
         st.markdown("---")
         start_button_rad = st.form_submit_button("Auswertung starten", type="primary")
@@ -1282,6 +1286,134 @@ elif sportart == "Radsport":
                         'HF [bpm]': f"{int(round(row_data['hr'], 0))}" if not np.isnan(row_data['hr']) else "-"
                     })
             st.dataframe(pd.DataFrame(df_table_rows), hide_index=True, width='stretch')
+
+        # --- RADSPORT PDF DOWNLOAD ---
+        st.markdown("---")
+        st.subheader("📄 Report-Generierung")
+        
+        # 1. Sprint raw values extraction or dummy fallback
+        sprint_times = st.session_state.get("sprint_times", [])
+        sprint_powers = st.session_state.get("sprint_powers", [])
+        sprint_cadences = st.session_state.get("sprint_cadences", [])
+        
+        if not sprint_powers or len(sprint_powers) < 2:
+            # Fallback dummy sprint values if none uploaded
+            sprint_times = [i * 0.1 for i in range(120)]
+            # Peak power around 1200W
+            sprint_powers = [max(0.0, 1200.0 * (1.0 - ((t - 2.0)**2) / 64.0)) for t in sprint_times]
+            sprint_cadences = [max(40.0, 110.0 - 2.0 * t) for t in sprint_times]
+
+        # 2. Calculate sprint force metrics using weight and 0.1725 crank length
+        avg_sprint_power = np.mean(sprint_powers)
+        max_sprint_power = np.max(sprint_powers)
+        
+        forces = []
+        for p, c in zip(sprint_powers, sprint_cadences):
+            if c > 0:
+                # Force F = Power / (crank_length * cadence * 2*pi / 60)
+                f = p / (0.1725 * c * 2.0 * np.pi / 60.0)
+            else:
+                f = 0.0
+            forces.append(f)
+            
+        max_force = np.max(forces) if forces else 0.0
+        
+        # Force at Pmax (find index of maximum power)
+        pmax_idx = np.argmax(sprint_powers) if sprint_powers else 0
+        force_at_pmax = forces[pmax_idx] if forces and pmax_idx < len(forces) else 0.0
+        
+        force_pct_max = (force_at_pmax / max_force * 100.0) if max_force > 0 else 0.0
+        
+        # 3. Dynamic percentage of VO2max at Anaerobic Threshold
+        ans_vo2_pct = (ans_vo2_abs / abs_vo2max * 100.0) if abs_vo2max > 0 else 0.0
+        rel_vo2max = (abs_vo2max / weight) if weight > 0 else 0.0
+        
+        # 4. Coaching potential overrides
+        pot_vo2max = float(st.session_state.get("pot_vo2max", 72.0))
+        pot_fat = float(st.session_state.get("pot_fat", 10.5))
+        pot_ans_abs = float(st.session_state.get("pot_ans_abs", 295.0))
+        pot_ans_rel = float(st.session_state.get("pot_ans_rel", 4.8))
+        pot_fatmax = float(st.session_state.get("pot_fatmax", 3.4))
+        pot_pmax = float(st.session_state.get("pot_pmax", 14.5))
+        pot_match = float(st.session_state.get("pot_match", 3.6))
+        pot_vlamax = float(st.session_state.get("pot_vlamax", 0.45))
+        
+        # Create PDF Bytes
+        pdf_bytes = None
+        pdf_error = None
+        with st.spinner("PDF wird erstellt..."):
+            try:
+                pdf_bytes = create_pdf_rad(
+                    athlete_name=athlete_name,
+                    birthdate=birthdate,
+                    test_date=test_date,
+                    test_type=vo2_source_lbl,
+                    weight=weight,
+                    body_fat_pct=body_fat_pct,
+                    rel_vo2max=rel_vo2max,
+                    ans_power=ans_power,
+                    ans_rel=ans_rel,
+                    ans_ee_gesamt=ans_ee_gesamt,
+                    ans_hr=ans_hr,
+                    ans_vo2_abs=ans_vo2_abs,
+                    ans_vo2_pct=ans_vo2_pct,
+                    ans_ee_kh_g=ans_ee_kh_g,
+                    fatmax_power=fatmax_power,
+                    fatmax_rel=fatmax_rel,
+                    fatmax_ee_gesamt=fatmax_ee_gesamt,
+                    fatmax_ee_fett=fatmax_ee_fett,
+                    map_val=map_val,
+                    carb_match_power=carb_match_power,
+                    carb_intake=carb_intake,
+                    vlamax=vlamax,
+                    avg_rest_lac=avg_rest_lac,
+                    max_post_lac=max_post_lac,
+                    t_glyc=t_glyc,
+                    t_bel=t_bel,
+                    t_alak=t_alak,
+                    coach=coach,
+                    sportart="Radsport",
+                    kategorie=kategorie,
+                    height=height,
+                    slope_val=slope_val,
+                    intercept_val=intercept_val,
+                    hfmax_val=hfmax_val,
+                    df_sim=df_sim,
+                    sprint_times=sprint_times,
+                    sprint_powers=sprint_powers,
+                    sprint_cadences=sprint_cadences,
+                    avg_sprint_power=avg_sprint_power,
+                    max_sprint_power=max_sprint_power,
+                    max_force=max_force,
+                    force_at_pmax=force_at_pmax,
+                    force_pct_max=force_pct_max,
+                    pot_vo2max=pot_vo2max,
+                    pot_fat=pot_fat,
+                    pot_ans_abs=pot_ans_abs,
+                    pot_ans_rel=pot_ans_rel,
+                    pot_fatmax=pot_fatmax,
+                    pot_pmax=pot_pmax,
+                    pot_match=pot_match,
+                    pot_vlamax=pot_vlamax
+                )
+            except Exception as e:
+                import traceback
+                pdf_error = traceback.format_exc()
+
+        if pdf_bytes is not None:
+            st.download_button(
+                label="📄 PDF Report herunterladen",
+                data=pdf_bytes,
+                file_name=f"HYCYS_Radsportdiagnostik_{athlete_name.replace(' ', '_')}.pdf",
+                mime="application/pdf",
+                type="primary",
+                key="radsport_pdf_download_btn"
+            )
+        else:
+            st.error(f"Fehler bei der PDF-Erstellung: Bitte Eingaben prüfen.")
+            if pdf_error:
+                with st.expander("Fehlerdetails anzeigen"):
+                    st.code(pdf_error)
 
     else:
         # Default view before starting the calculation
@@ -2080,6 +2212,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
             
     return pdf_output.encode('latin-1', 'replace')
 
+
 # 3. BERECHNUNG & ANZEIGE
 if start_button:
     raw_speeds = st.session_state.df_lauftest_input["v (m/s)"].values
@@ -2587,3 +2720,4 @@ if start_button:
             mime="application/pdf",
             type="primary"
         )
+
