@@ -2,6 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
 import datetime
 import pwlf
 from PIL import Image
@@ -118,7 +120,8 @@ metadata_defaults = [
     ("carb_intake_factor", 1.0),
     ("vo2_override", 4368.0),
     ("t_bel_manual", 13.2),
-    ("t_alak_manual", 3.1)
+    ("t_alak_manual", 3.1),
+    ("diagnostik_type", "Cycling BLUE")
 ]
 for key, val in metadata_defaults:
     if key not in st.session_state:
@@ -660,6 +663,13 @@ elif sportart == "Radsport":
                 kategorie_options = kategorie_options + [kategorie_val]
             kategorie = st.selectbox("Kategorie", options=kategorie_options, index=kategorie_options.index(kategorie_val))
             st.session_state.kategorie = kategorie
+
+            diag_type_options = ["Cycling WHITE", "Cycling BLUE", "Cycling GOLD"]
+            diag_type_val = st.session_state.get("diagnostik_type", "Cycling BLUE")
+            if diag_type_val not in diag_type_options:
+                diag_type_val = "Cycling BLUE"
+            diagnostik_type = st.selectbox("Diagnostik Typ", options=diag_type_options, index=diag_type_options.index(diag_type_val))
+            st.session_state.diagnostik_type = diagnostik_type
             
             # Körperfettmessung (Parizkova 10-Falten)
             with st.expander("Körperfettmessung (Parizkova 10-Falten)"):
@@ -1347,7 +1357,7 @@ elif sportart == "Radsport":
                     athlete_name=athlete_name,
                     birthdate=birthdate,
                     test_date=test_date,
-                    test_type=vo2_source_lbl,
+                    test_type=st.session_state.get("diagnostik_type", "Cycling BLUE"),
                     weight=weight,
                     body_fat_pct=body_fat_pct,
                     rel_vo2max=rel_vo2max,
@@ -1565,6 +1575,13 @@ with st.sidebar.form("running_form", enter_to_submit=False):
         coach = st.selectbox("Coach", options=coach_options, index=coach_options.index(coach_val), key="coach_lauft_widget")
         st.session_state.coach = coach
 
+        diag_type_options = ["Running WHITE", "Running BLUE", "Running GOLD"]
+        diag_type_val = st.session_state.get("diagnostik_type", "Running BLUE")
+        if diag_type_val not in diag_type_options:
+            diag_type_val = "Running BLUE"
+        diagnostik_type = st.selectbox("Diagnostik Typ", options=diag_type_options, index=diag_type_options.index(diag_type_val), key="diagnostik_type_lauft_widget")
+        st.session_state.diagnostik_type = diagnostik_type
+
         # Körperfettmessung (Parizkova 10-Falten)
         with st.expander("Körperfettmessung (Parizkova 10-Falten)"):
             edited_sf = st.data_editor(
@@ -1746,6 +1763,11 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         pdf.set_text_color(*color)
         pdf.text(x, y + size * 0.85, text.encode('latin-1', 'replace').decode('latin-1'))
 
+    def draw_text_centered(cx, y, text, size=8.3, font_style='', color=c_black):
+        pdf.set_font('Arial', font_style, size)
+        w = pdf.get_string_width(str(text).encode('latin-1', 'replace').decode('latin-1'))
+        draw_text(cx - w / 2.0, y, text, size=size, font_style=font_style, color=color)
+
     # Helper function to draw colored rectangles
     def draw_rect(x, y, w, h, fill_color=None, stroke_color=None, stroke_width=0.5):
         if fill_color:
@@ -1766,11 +1788,11 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         pdf.image('pdf_assets/page1_img3.png', x=86.8, y=194.4, w=400, h=124)
         
     draw_rect(50.9, 460.4, 479.1, 24.5, fill_color=c_gold)
-    draw_text(111.7, 464.7, "HYCYS Running BLUE", size=13.8, font_style='B', color=c_white)
+    draw_text(111.7, 464.7, f"HYCYS {test_type}", size=13.8, font_style='B', color=c_white)
 
     labels_s1 = ["Name", "Geburtsdatum", "Coach", "Testdatum", "Sportart", "Kategorie"]
     vals_s1 = [athlete_name, birthdate, coach, test_date, sportart, kategorie]
-    y_coords_s1 = [512.7, 524.7, 564.6, 577.9, 604.6, 617.9]
+    y_coords_s1 = [490.7, 502.7, 542.6, 555.9, 582.6, 595.9]
     for lbl, val, y_coord in zip(labels_s1, vals_s1, y_coords_s1):
         draw_text(111.0, y_coord, lbl, size=8.3, color=c_black)
         draw_text(214.5, y_coord, val, size=8.3, font_style='B', color=c_black)
@@ -1790,56 +1812,69 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     if os.path.exists('pdf_assets/page2_img1.png'):
         pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
 
-    draw_rect(57.6, 133.9, 171.9, 14.8, fill_color=c_teal)
-    draw_text(113.2, 135.9, "Anthropologie", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 133.9, 171.9, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 171.9 / 2.0, 135.0, "Anthropologie", size=8.2, font_style='B', color=c_white)
 
-    draw_text(59.3, 173.2, "Gewicht", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(59.3, 173.2, "Gewicht", size=8.3, font_style='B', color=c_black)
     draw_text(199.9, 173.2, f"{weight:.1f} kg".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(59.3, 183.8, "Größe", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(59.3, 183.8, "Größe", size=8.3, font_style='B', color=c_black)
     draw_text(199.9, 183.8, f"{int(height)}cm", size=8.3, font_style='B', color=c_dark_grey)
     
     bmi = weight / ((height/100.0)**2) if height > 0 else 0.0
-    draw_text(59.3, 209.7, "Body Mass Index", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(59.3, 209.7, "Body Mass Index", size=8.3, font_style='B', color=c_black)
     draw_text(187.5, 209.7, f"{bmi:.1f} kg/m²".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
     
-    draw_text(145.3, 249.0, "Masse", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(220.6, 249.0, "%", size=8.3, font_style='B', color=c_dark_grey)
+    # Merged gold box for Masse & %
+    draw_rect(113.18, 245.58, 112.94, 10.44, fill_color=c_gold)
+    draw_text_centered(141.42, 246.8, "Masse", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(197.89, 246.8, "%",     size=8.2, font_style='B', color=c_white)
     
     fett_kg = weight * (body_fat_pct / 100.0)
     fettfrei_kg = weight - fett_kg
-    draw_text(59.3, 259.6, "Fett", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(142.6, 259.6, f"{fett_kg:.1f} kg".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(202.4, 259.6, f"{body_fat_pct:.1f} %".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(59.3, 259.6, "Fett", size=8.3, font_style='B', color=c_black)
+    draw_text_centered(141.42, 259.6, f"{fett_kg:.1f} kg".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(197.89, 259.6, f"{body_fat_pct:.1f} %".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
     
-    draw_text(59.3, 270.1, "Fettfrei", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(142.6, 270.1, f"{fettfrei_kg:.1f} kg".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(202.4, 270.1, f"{100.0 - body_fat_pct:.1f} %".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(59.3, 270.1, "Fettfrei", size=8.3, font_style='B', color=c_black)
+    draw_text_centered(141.42, 270.1, f"{fettfrei_kg:.1f} kg".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(197.89, 270.1, f"{100.0 - body_fat_pct:.1f} %".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
 
     # Donut Pie Chart (Fett / Fettfrei)
-    fig, ax = plt.subplots(figsize=(2.5, 1.8), dpi=300)
-    ax.pie(
-        [max(0.1, body_fat_pct), max(0.1, 100.0 - body_fat_pct)],
-        labels=['Fett', 'Fettfrei'],
+    fig, ax = plt.subplots(figsize=(3.856, 2.0), dpi=300)
+    pct_fett = max(0.1, body_fat_pct)
+    pct_frei = max(0.1, 100.0 - body_fat_pct)
+    wedges, texts, autotexts = ax.pie(
+        [pct_fett, pct_frei],
         colors=['#cdb663', '#2cb7b9'],
-        autopct='%1.1f%%',
+        autopct=lambda p: f"{p:.1f} %".replace('.', ','),
         startangle=90,
-        textprops=dict(color="black", size=6, weight="bold"),
-        wedgeprops=dict(width=0.35, edgecolor='w', linewidth=1)
+        pctdistance=0.60,
+        textprops=dict(size=7, weight='bold', color='white'),
+        wedgeprops=dict(width=0.35, edgecolor='white', linewidth=2),
     )
+    for at in autotexts:
+        at.set_color('white')
     ax.axis('equal')
-    plt.tight_layout()
+    # Manual legend matching reference
+    handles = [Patch(color='#cdb663', label='Fett'), Patch(color='#2cb7b9', label='Fettfrei')]
+    legend = ax.legend(handles=handles, loc='center left', bbox_to_anchor=(1.05, 0.5), fontsize=7, frameon=False)
+    for text in legend.get_texts():
+        text.set_weight('bold')
+        text.set_color('#595a59')
+    fig.patch.set_facecolor('white')
+    plt.tight_layout(pad=0.3)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_pie:
-        fig.savefig(tmp_pie.name, format="png", bbox_inches="tight", transparent=True)
+        fig.savefig(tmp_pie.name, format="png", bbox_inches="tight", facecolor='white')
         plt.close(fig)
-        pdf.image(tmp_pie.name, x=272.5, y=141.6, w=236, h=140)
+        pdf.image(tmp_pie.name, x=268.05, y=134.92, w=227.56, h=118.01)
         temp_files.append(tmp_pie.name)
 
-    # VLamax gold box
-    draw_rect(57.6, 293.2, 286.4, 14.8, fill_color=c_teal)
-    draw_text(93.4, 295.1, "Anaerober Stoffwechsel - max. Laktatbildungsrate", size=9.0, font_style='B', color=c_white)
+    # VLamax Section
+    draw_rect(57.6, 293.2, 225.8, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 225.8 / 2.0, 294.3, "Anaerober Stoffwechsel - max. Laktatbildungsrate", size=8.2, font_style='B', color=c_white)
     
-    draw_rect(114.9, 321.2, 171.8, 13.0, fill_color=c_gold)
-    draw_text(186.9, 321.9, "VLamax", size=9.0, font_style='B', color=c_white)
+    draw_rect(114.02, 314.9, 112.94, 10.44, fill_color=c_gold)
+    draw_text_centered(114.02 + 112.94 / 2.0, 316.1, "VLamax", size=8.2, font_style='B', color=c_white)
     
     vla_ans_str = "-"
     ans_row = df_res[df_res['Modell'].str.contains('OBLA 4.0', na=False)]
@@ -1852,11 +1887,11 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
                 vla_ans_str = f"{float(vla_val):.2f} mmol/l/s".replace('.', ',')
             except:
                 vla_ans_str = str(vla_val)
-    draw_text(175.3, 334.7, vla_ans_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(114.02 + 112.94 / 2.0, 314.9 + 10.44 + 0.8, vla_ans_str, size=8.2, font_style='B', color=c_dark_grey)
 
-    # VO2max 3 gold boxes
-    draw_rect(57.6, 368.4, 343.6, 14.8, fill_color=c_teal)
-    draw_text(124.1, 370.4, "Aerober Stoffwechsel - max. Sauerstoffaufnahme", size=9.0, font_style='B', color=c_white)
+    # VO2max Section
+    draw_rect(57.6, 355.0, 343.6, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 343.6 / 2.0, 356.1, "Aerober Stoffwechsel - max. Sauerstoffaufnahme", size=8.2, font_style='B', color=c_white)
     
     vo2_abs = rel_vo2max * weight
     vo2_abs_str = f"{int(vo2_abs):,}".replace(",", ".") + " ml/min" if vo2_abs > 0 else "-"
@@ -1867,63 +1902,75 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     vo2_ffm = (rel_vo2max * weight) / ffm_kg if ffm_kg > 0 else 0.0
     vo2_ffm_str = f"{vo2_ffm:.1f} ml/min/kg".replace('.', ',') if vo2_ffm > 0 else "-"
 
-    draw_rect(57.6, 396.4, 143.6, 13.1, fill_color=c_gold)
-    draw_text(90.9, 397.1, "VO2max abs.", size=9.0, font_style='B', color=c_white)
-    draw_text(90.6, 411.0, vo2_abs_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_rect(57.6, 375.0, 143.6, 10.44, fill_color=c_gold)
+    draw_text_centered(57.6 + 143.6 / 2.0, 376.2, "VO2max abs.", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(57.6 + 143.6 / 2.0, 375.0 + 10.44 + 0.8, vo2_abs_str, size=8.2, font_style='B', color=c_dark_grey)
     
-    draw_rect(201.2, 396.4, 143.6, 13.1, fill_color=c_gold)
-    draw_text(207.6, 397.1, "VO2max rel.", size=9.0, font_style='B', color=c_white)
-    draw_text(201.5, 411.0, vo2_rel_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_rect(201.2, 375.0, 143.6, 10.44, fill_color=c_gold)
+    draw_text_centered(201.2 + 143.6 / 2.0, 376.2, "VO2max rel.", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(201.2 + 143.6 / 2.0, 375.0 + 10.44 + 0.8, vo2_rel_str, size=8.2, font_style='B', color=c_dark_grey)
     
-    draw_rect(344.8, 396.4, 143.4, 13.1, fill_color=c_gold)
-    draw_text(311.6, 397.1, "VO2max rel. FFM", size=9.0, font_style='B', color=c_white)
-    draw_text(316.0, 411.0, vo2_ffm_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_rect(344.8, 375.0, 143.4, 10.44, fill_color=c_gold)
+    draw_text_centered(344.8 + 143.4 / 2.0, 376.2, "VO2max rel. FFM", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(344.8 + 143.4 / 2.0, 375.0 + 10.44 + 0.8, vo2_ffm_str, size=8.2, font_style='B', color=c_dark_grey)
 
     # Lactate kinetics plot
-    draw_rect(57.6, 449.3, 458.1, 11.2, fill_color=c_teal)
-    draw_text(222.1, 449.5, "Interaktion Laktatauf- & abbau", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 415.0, 458.1, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 458.1 / 2.0, 416.1, "Interaktion Laktatauf- & abbau", size=8.2, font_style='B', color=c_white)
     
     fig, ax = plt.subplots(figsize=(6, 3.2), dpi=300)
     v_arr = np.linspace(speed[0], speed[-1], 100) if len(speed) > 0 else np.linspace(2.9, 4.5, 100)
     
     if uploaded_file is not None and len(vo2_steady_abs) > 0:
-        # Plot real absolute VO2 curve
-        ax.plot(speed[:len(vo2_steady_abs)], vo2_steady_abs, color='#595a59', linewidth=1.5, marker='s', markersize=3, label='Sauerstoffaufnahme - VO2')
+        ax.plot(speed[:len(vo2_steady_abs)], vo2_steady_abs, color='#595a59', linewidth=2.5, marker='s', markersize=3)
         ax.set_ylabel('VO2 [ml/min]', color='#595a59', fontsize=7, fontweight='bold')
-        ax.tick_params(axis='y', labelcolor='#595a59', labelsize=6)
-        ax.grid(True, linestyle=':', alpha=0.6)
+        ax.tick_params(axis='y', labelcolor='#595a59', labelsize=6, width=1.2)
+        ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+        ax.set_axisbelow(True)
     else:
         ax.set_ylabel('VO2 [ml/min]', color='#595a59', fontsize=7, fontweight='bold')
-        ax.grid(True, linestyle=':', alpha=0.6)
+        ax.tick_params(axis='y', labelcolor='#595a59', labelsize=6, width=1.2)
+        ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+        ax.set_axisbelow(True)
         
     ax2 = ax.twinx()
-    # Plot real lactate curve on right axis
     poly_coeffs = np.polyfit(speed, lactate, 3)
     poly_func = np.poly1d(poly_coeffs)
-    ax2.plot(v_arr, poly_func(v_arr), color='#2cb7b9', linewidth=1.5, label='Laktatabbau')
-    ax2.plot(speed, lactate, 'ko', markersize=4, label='Messwerte')
+    ax2.plot(v_arr, poly_func(v_arr), color='#2cb7b9', linewidth=2.5)
+    ax2.plot(speed, lactate, 'ko', markersize=4)
     
-    # Mock a lactate production curve for premium visualization matching template
     v_start, v_end = speed[0], speed[-1]
     lac_prod = lactate[0] + (lactate[-1] - lactate[0]) * ((v_arr - v_start)/(v_end - v_start))**3.5
-    ax2.plot(v_arr, lac_prod, color='#cdb663', linewidth=1.5, linestyle='--', label='Laktatproduktion')
+    ax2.plot(v_arr, lac_prod, color='#cdb663', linewidth=2.5, linestyle='--')
     
-    ax2.set_ylabel('Laktatkinetik [mmol/L/min]', color='#2cb7b9', fontsize=7, fontweight='bold')
-    ax2.tick_params(axis='y', labelcolor='#2cb7b9', labelsize=6)
+    ax2.set_ylabel('Laktatkinetik [mmol/L/min]', color='#595a59', fontsize=7, fontweight='bold')
+    ax2.tick_params(axis='y', labelcolor='#595a59', labelsize=6, width=1.2)
     
-    ax.set_xlabel('Geschwindigkeit [m/s]', fontsize=7, fontweight='bold')
+    ax.set_xlabel('Geschwindigkeit [m/s]', color='#595a59', fontsize=7, fontweight='bold')
     ax.set_xlim(v_start, v_end)
-    ax.tick_params(axis='x', labelsize=6)
+    ax.tick_params(axis='x', labelcolor='#595a59', labelsize=6, width=1.2)
     
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines + lines2, labels + labels2, loc='upper left', fontsize=5, framealpha=0.8)
+    for s in ax.spines.values():
+        s.set_color('#595a59')
+        s.set_linewidth(1.2)
+    for s in ax2.spines.values():
+        s.set_color('#595a59')
+        s.set_linewidth(1.2)
+
+    for label in ax.get_xticklabels(): label.set_weight('bold')
+    for label in ax.get_yticklabels(): label.set_weight('bold')
+    for label in ax2.get_yticklabels(): label.set_weight('bold')
+
+    bbox_props = dict(boxstyle='square,pad=0.2', facecolor='white', edgecolor='none', alpha=1.0)
+    ax.text(0.24, 0.43, 'Sauerstoffaufnahme - VO2', color='#595a59', fontsize=6.5, fontweight='bold', ha='center', va='center', transform=ax.transAxes, bbox=bbox_props, zorder=10)
+    ax2.text(0.66, 0.81, 'Laktatproduktion', color='#cdb663', fontsize=6.5, fontweight='bold', ha='center', va='center', transform=ax2.transAxes, bbox=bbox_props, zorder=10)
+    ax2.text(0.76, 0.33, 'Laktatabbau', color='#2cb7b9', fontsize=6.5, fontweight='bold', ha='center', va='center', transform=ax2.transAxes, bbox=bbox_props, zorder=10)
     
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_lactate:
         fig.savefig(tmp_lactate.name, format="png", bbox_inches="tight")
         plt.close(fig)
-        pdf.image(tmp_lactate.name, x=55.2, y=466.1, w=455, h=248)
+        pdf.image(tmp_lactate.name, x=55.2, y=432.0, w=455, h=248)
         temp_files.append(tmp_lactate.name)
 
     # --- SEITE 3: LAUFÖKONOMIE ---
@@ -1932,13 +1979,13 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     if os.path.exists('pdf_assets/page2_img1.png'):
         pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
         
-    draw_rect(57.6, 133.9, 207.0, 14.8, fill_color=c_teal)
-    draw_text(130.6, 135.9, "Laufökonomie", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 133.9, 207.0, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 207.0 / 2.0, 135.0, "Laufökonomie", size=8.2, font_style='B', color=c_white)
 
     # Table Header
-    draw_rect(57.6, 159.1, 207.0, 13.4, fill_color=c_gold)
-    draw_text(73.8, 160.4, "Geschwindigkeit", size=9.0, font_style='B', color=c_white)
-    draw_text(182.3, 160.4, "Laufökonomie", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 159.1, 207.0, 10.44, fill_color=c_gold)
+    draw_text_centered(57.6 + 103.5 / 2.0, 160.3, "Geschwindigkeit", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(57.6 + 103.5 + 103.5 / 2.0, 160.3, "Laufökonomie", size=8.2, font_style='B', color=c_white)
 
     # Populate running economy values dynamically
     speeds_s3 = []
@@ -1961,8 +2008,8 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         
     for i in range(len(speeds_s3)):
         y_coord = y_coords_s3[i]
-        draw_text(95.9, y_coord, speeds_s3[i], size=8.3, font_style='B', color=c_black)
-        draw_text(176.2, y_coord, eco_vals_s3[i], size=8.3, font_style='B', color=c_black)
+        draw_text_centered(57.6 + 103.5 / 2.0, y_coord, speeds_s3[i], size=8.3, font_style='B', color=c_black)
+        draw_text_centered(57.6 + 103.5 + 103.5 / 2.0, y_coord, eco_vals_s3[i], size=8.3, font_style='B', color=c_black)
 
     # Chart 3a: Running Economy plot
     fig, ax = plt.subplots(figsize=(3, 1.8), dpi=300)
@@ -1976,13 +2023,16 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
             valid_speeds_v.append(v_ms)
             
     if len(valid_re) > 0:
-        ax.plot(valid_speeds_v, valid_re, marker='o', color='#2cb7b9', linewidth=1.5, markersize=4)
+        ax.plot(valid_speeds_v, valid_re, marker='o', color='#2cb7b9', linewidth=2.5, markersize=4)
         ax.set_ylim(min(valid_re)*0.9, max(valid_re)*1.1)
     ax.set_ylabel('RE [ml/kg/km]', color='#595a59', fontsize=6, fontweight='bold')
     ax.set_xlabel('Geschwindigkeit [m/s]', color='#595a59', fontsize=6, fontweight='bold')
     ax.set_xlim(speed[0]*0.95, speed[-1]*1.05)
-    ax.tick_params(axis='both', labelsize=5)
-    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.tick_params(axis='both', labelsize=5, width=1.2)
+    ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+    for s in ax.spines.values():
+        s.set_color('#595a59')
+        s.set_linewidth(1.2)
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_eco_chart:
         fig.savefig(tmp_eco_chart.name, format="png", bbox_inches="tight")
@@ -1991,23 +2041,23 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         temp_files.append(tmp_eco_chart.name)
 
     # Marathon predictions
-    draw_rect(57.6, 334.1, 414.0, 11.2, fill_color=c_teal)
-    draw_text(176.1, 334.3, "Einfluss Laufökonomie auf Marathon-Zeit", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 334.1, 414.0, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 414.0 / 2.0, 335.2, "Einfluss Laufökonomie auf Marathon-Zeit", size=8.2, font_style='B', color=c_white)
 
-    draw_rect(57.6, 355.1, 414.0, 13.4, fill_color=c_gold)
-    draw_text(79.7, 356.3, "Verbesserung", size=9.0, font_style='B', color=c_white)
-    draw_text(180.9, 356.3, "Marathon-Pace", size=9.0, font_style='B', color=c_white)
-    draw_text(301.4, 356.3, "Zielzeit", size=9.0, font_style='B', color=c_white)
-    draw_text(395.2, 356.3, "Delta zu 0%", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 355.1, 414.0, 10.44, fill_color=c_gold)
+    draw_text_centered(109.35, 356.2, "Verbesserung", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(212.85, 356.2, "Marathon-Pace", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(316.35, 356.2, "Zielzeit", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(419.85, 356.2, "Delta zu 0%", size=8.2, font_style='B', color=c_white)
 
     y_coords_s3_m = [386.0, 398.9, 412.3]
     improves = ["0%", "5%", "10%"]
     for imp, y_coord in zip(improves, y_coords_s3_m):
-        draw_text(103.5, y_coord, imp, size=9.0, font_style='B', color=c_dark_grey)
-        draw_text(184.6, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
-        draw_text(294.6, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
+        draw_text_centered(109.35, y_coord, imp, size=9.0, font_style='B', color=c_dark_grey)
+        draw_text_centered(212.85, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
+        draw_text_centered(316.35, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
         if imp != "0%":
-            draw_text(396.5, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
+            draw_text_centered(419.85, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
 
     # Empty Marathon prediction chart
     fig, ax = plt.subplots(figsize=(5, 2.5), dpi=300)
@@ -2019,8 +2069,10 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     ax.set_ylim(0, 3.5)
     ax.set_yticks([0, 1, 2, 3])
     ax.set_yticklabels(['0%', '1%', '2%', '3%'])
-    ax.tick_params(axis='both', labelsize=5)
-    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.tick_params(axis='both', labelcolor='#595a59', labelsize=5, width=1.2)
+    for s in ax.spines.values(): s.set_color('#595a59'); s.set_linewidth(1.2)
+    ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+    ax.set_axisbelow(True)
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_mara_chart:
         fig.savefig(tmp_mara_chart.name, format="png", bbox_inches="tight")
@@ -2034,15 +2086,15 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     if os.path.exists('pdf_assets/page2_img1.png'):
         pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
         
-    draw_rect(57.6, 133.9, 465.7, 14.8, fill_color=c_teal)
-    draw_text(161.3, 135.9, "Anaerobe Schwelle (ANS) - Geschwindigkeit & Herzfrequenz", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 133.9, 465.7, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 465.7 / 2.0, 135.0, "Anaerobe Schwelle (ANS) - Geschwindigkeit & Herzfrequenz", size=8.2, font_style='B', color=c_white)
 
     # Box 1
-    draw_rect(57.6, 159.1, 207.0, 13.4, fill_color=c_gold)
-    draw_text(116.7, 160.4, "Laufgeschwindigkeit", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 159.1, 207.0, 10.44, fill_color=c_gold)
+    draw_text_centered(57.6 + 207.0 / 2.0, 160.3, "Laufgeschwindigkeit", size=8.2, font_style='B', color=c_white)
     
-    draw_rect(368.0, 159.1, 103.6, 13.4, fill_color=c_gold)
-    draw_text(391.5, 160.4, "Herzfrequenz", size=9.0, font_style='B', color=c_white)
+    draw_rect(368.0, 159.1, 103.6, 10.44, fill_color=c_gold)
+    draw_text_centered(368.0 + 103.6 / 2.0, 160.3, "Herzfrequenz", size=8.2, font_style='B', color=c_white)
 
     ans_ms_str, ans_pace_str, ans_hf_str = "-", "-", "-"
     v_ans = 0.0
@@ -2054,23 +2106,23 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
             ans_pace_str = f"{int(pace_sec // 60):02d}:{int(pace_sec % 60):02d} min/km"
             ans_hf_str = f"{int(ans_row.iloc[0].get('HF', 0))} bpm"
 
-    draw_text(93.6, 172.8, ans_ms_str, size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(187.1, 172.8, ans_pace_str, size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(403.5, 172.8, ans_hf_str, size=8.3, font_style='B', color=c_dark_grey)
-
+    draw_text_centered(109.35, 170.34, ans_ms_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(212.85, 170.34, ans_pace_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(368.0 + 103.6 / 2.0, 170.34, ans_hf_str, size=8.3, font_style='B', color=c_dark_grey)
+ 
     # Box 2: VO2
-    draw_rect(57.6, 206.9, 465.7, 14.8, fill_color=c_teal)
-    draw_text(222.6, 208.8, "Anaerobe Schwelle (ANS) - VO2", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(57.6, 234.9, 103.6, 13.4, fill_color=c_gold)
-    draw_text(91.3, 235.8, "VO2 abs.", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(212.8, 234.9, 103.6, 13.4, fill_color=c_gold)
-    draw_text(248.8, 235.8, "VO2 rel.", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(368.0, 234.9, 103.6, 13.4, fill_color=c_gold)
-    draw_text(400.9, 235.8, "% VO2max", size=9.0, font_style='B', color=c_white)
-
+    draw_rect(57.6, 206.9, 465.7, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 465.7 / 2.0, 208.0, "Anaerobe Schwelle (ANS) - VO2", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(57.6, 234.9, 103.6, 10.44, fill_color=c_gold)
+    draw_text_centered(57.6 + 103.6 / 2.0, 236.1, "VO2 abs.", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(212.8, 234.9, 103.6, 10.44, fill_color=c_gold)
+    draw_text_centered(212.8 + 103.6 / 2.0, 236.1, "VO2 rel.", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(368.0, 234.9, 103.6, 10.44, fill_color=c_gold)
+    draw_text_centered(368.0 + 103.6 / 2.0, 236.1, "% VO2max", size=8.2, font_style='B', color=c_white)
+ 
     ans_vo2_abs_str, ans_vo2_rel_str, ans_vo2_pct_str = "-", "-", "-"
     if uploaded_file is not None and v_ans > 0 and len(vo2_steady_values) > 0:
         ans_vo2_rel = np.interp(v_ans, speed, vo2_steady_values)
@@ -2080,39 +2132,39 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         ans_vo2_abs_str = f"{int(ans_vo2_abs):,}".replace(",", ".") + " ml/min"
         ans_vo2_rel_str = f"{ans_vo2_rel:.1f} ml/min/kg".replace('.', ',')
         ans_vo2_pct_str = f"{int(ans_vo2_pct)} %"
-
-    draw_text(85.1, 248.5, ans_vo2_abs_str, size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(236.7, 248.5, ans_vo2_rel_str, size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(411.0, 248.5, ans_vo2_pct_str, size=8.3, font_style='B', color=c_dark_grey)
-
+ 
+    draw_text_centered(57.6 + 103.6 / 2.0, 246.14, ans_vo2_abs_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(212.8 + 103.6 / 2.0, 246.14, ans_vo2_rel_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(368.0 + 103.6 / 2.0, 246.14, ans_vo2_pct_str, size=8.3, font_style='B', color=c_dark_grey)
+ 
     # Energetik Box
-    draw_rect(57.6, 279.9, 465.7, 13.4, fill_color=c_teal)
-    draw_text(211.1, 281.1, "Anaerobe Schwelle (ANS) - Energetik", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(57.6, 307.8, 103.6, 13.4, fill_color=c_gold)
-    draw_text(71.4, 309.1, "Energieverbrauch", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(212.8, 307.8, 103.6, 13.4, fill_color=c_gold)
-    draw_text(234.6, 309.1, "KH-Verbrauch", size=9.0, font_style='B', color=c_white)
-
-    draw_text(86.8, 322.7, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(250.9, 322.7, "-", size=8.3, font_style='B', color=c_dark_grey)
-
+    draw_rect(57.6, 279.9, 465.7, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 465.7 / 2.0, 281.0, "Anaerobe Schwelle (ANS) - Energetik", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(57.6, 307.8, 103.6, 10.44, fill_color=c_gold)
+    draw_text_centered(57.6 + 103.6 / 2.0, 309.0, "Energieverbrauch", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(212.8, 307.8, 103.6, 10.44, fill_color=c_gold)
+    draw_text_centered(212.8 + 103.6 / 2.0, 309.0, "KH-Verbrauch", size=8.2, font_style='B', color=c_white)
+ 
+    draw_text_centered(57.6 + 103.6 / 2.0, 319.04, "-", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(212.8 + 103.6 / 2.0, 319.04, "-", size=8.3, font_style='B', color=c_dark_grey)
+ 
     # Fatmax Box
-    draw_rect(57.6, 355.1, 465.7, 13.4, fill_color=c_teal)
-    draw_text(235.2, 356.3, "Fettstoffwechsel - Fatmax", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(57.6, 383.1, 207.0, 13.4, fill_color=c_gold)
-    draw_text(116.7, 384.3, "Laufgeschwindigkeit", size=9.0, font_style='B', color=c_white)
-
-    draw_rect(316.3, 383.1, 207.0, 13.4, fill_color=c_gold)
-    draw_text(330.1, 384.3, "Energieverbrauch", size=9.0, font_style='B', color=c_white)
-    draw_text(441.8, 384.3, "Fettverbrauch", size=9.0, font_style='B', color=c_white)
-
-    draw_text(93.6, 397.9, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(187.1, 397.9, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(348.8, 397.9, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text(452.3, 397.9, "-", size=8.3, font_style='B', color=c_dark_grey)
+    draw_rect(57.6, 355.1, 465.7, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 465.7 / 2.0, 356.2, "Fettstoffwechsel - Fatmax", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(57.6, 383.1, 207.0, 10.44, fill_color=c_gold)
+    draw_text_centered(57.6 + 207.0 / 2.0, 384.3, "Laufgeschwindigkeit", size=8.2, font_style='B', color=c_white)
+ 
+    draw_rect(316.3, 383.1, 207.0, 10.44, fill_color=c_gold)
+    draw_text_centered(316.3 + 207.0 / 4.0, 384.3, "Energie", size=8.2, font_style='B', color=c_white)
+    draw_text_centered(316.3 + 3 * 207.0 / 4.0, 384.3, "Energie Fett", size=8.2, font_style='B', color=c_white)
+ 
+    draw_text_centered(109.35, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(212.85, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(316.3 + 207.0 / 4.0, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(316.3 + 3 * 207.0 / 4.0, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
 
     # Empty Energetik chart
     fig, ax = plt.subplots(figsize=(6, 3.2), dpi=300)
@@ -2123,9 +2175,12 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     ax2 = ax.twinx()
     ax2.set_ylabel('Kohlenhydratverbrauch [g/h]', color='#595a59', fontsize=6, fontweight='bold')
     ax2.set_ylim(0, 400)
-    ax.tick_params(axis='both', labelsize=5)
-    ax2.tick_params(axis='both', labelsize=5)
-    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.tick_params(axis='both', labelcolor='#595a59', labelsize=5, width=1.2)
+    ax2.tick_params(axis='both', labelcolor='#595a59', labelsize=5, width=1.2)
+    for s in ax.spines.values(): s.set_color('#595a59'); s.set_linewidth(1.2)
+    for s in ax2.spines.values(): s.set_color('#595a59'); s.set_linewidth(1.2)
+    ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+    ax.set_axisbelow(True)
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_ener_chart:
         fig.savefig(tmp_ener_chart.name, format="png", bbox_inches="tight")
@@ -2139,67 +2194,313 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     if os.path.exists('pdf_assets/page2_img1.png'):
         pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
         
-    draw_rect(57.6, 133.9, 155.3, 14.8, fill_color=c_teal)
-    draw_text(104.5, 135.9, "Referenzdaten", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 133.9, 155.3, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 155.3 / 2.0, 135.0, "Referenzdaten", size=8.2, font_style='B', color=c_white)
 
-    # Polar Radar chart for Reference data (background rings only)
-    fig = plt.figure(figsize=(4, 4), dpi=300)
-    ax = fig.add_subplot(111, polar=True)
-    categories = ['VO2max', 'Fettanteil', 'Laufökonomie', 'ANS', 'Fatmax', 'KH-Match', 'VLamax']
-    N = len(categories)
+    # Cartesian Radar chart for Reference data
+    fig, ax = plt.subplots(figsize=(5.0, 5.0), dpi=300)
+    ax.set_aspect('equal')
+    
+    radar_cats = ['VO2max', 'Fettanteil', 'Laufökonomie', 'ANS', 'Fatmax', 'KH-Match', 'VLamax']
+    radar_labels = [
+        'VO2max\n[ml/min/kg]',
+        'Fettanteil\n[%]',
+        'Laufökonomie\n[ml/min/kg*m/s]',
+        'ANS\n[m/s]',
+        'Fatmax\n[m/s]',
+        'KH-Match\n[m/s]',
+        'VLamax\n[mmol/l/s]'
+    ]
+    N = len(radar_cats)
     angles = [n / float(N) * 2 * np.pi for n in range(N)]
     angles += angles[:1]
     
-    ax.fill(angles, [100]*len(angles), color='#cdb663', alpha=0.15, label='Sehr gut')
-    ax.fill(angles, [80]*len(angles), color='#2cb7b9', alpha=0.15, label='Gut')
-    ax.fill(angles, [60]*len(angles), color='#e6e6e6', alpha=0.2, label='Zu verbessern')
-    ax.fill(angles, [35]*len(angles), color='#c0c0c0', alpha=0.25, label='Schwach')
+    # Background rings (Sehr gut > Gut > Zu verbessern > Schwach)
+    x_100 = [100 * np.cos(t) for t in angles]
+    y_100 = [100 * np.sin(t) for t in angles]
+    ax.fill(x_100, y_100, color='#cdb663', edgecolor='none', zorder=1, label='Sehr gut')
     
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(categories, fontsize=5, fontweight='bold')
-    ax.set_yticklabels([])
-    ax.grid(True, color='gray', linestyle=':', linewidth=0.5)
+    x_80 = [80 * np.cos(t) for t in angles]
+    y_80 = [80 * np.sin(t) for t in angles]
+    ax.fill(x_80, y_80, color='#2cb7b9', edgecolor='none', zorder=2, label='Gut')
+    
+    x_60 = [60 * np.cos(t) for t in angles]
+    y_60 = [60 * np.sin(t) for t in angles]
+    ax.fill(x_60, y_60, color='#ffffff', edgecolor='none', zorder=3, label='Zu verbessern')
+    
+    x_35 = [35 * np.cos(t) for t in angles]
+    y_35 = [35 * np.sin(t) for t in angles]
+    ax.fill(x_35, y_35, color='#595a59', edgecolor='none', zorder=4, label='Schwach')
+    
+    # Normalize running reference values
+    def normalize_ref_running(val, cat):
+        ref_params = {
+            'VO2max':       (60.0,  5.0,   False),
+            'Fettanteil':   (13.0,  2.5,   True),
+            'Laufökonomie': (210.0, 15.0,  True),
+            'ANS':          (3.5,   0.4,   False),
+            'Fatmax':       (2.7,   0.3,   False),
+            'KH-Match':     (3.0,   0.3,   False),
+            'VLamax':       (0.6,   0.1,   True),
+        }
+        if cat not in ref_params:
+            return 50.0
+        mean, sd, inverted = ref_params[cat]
+        span = 6 * sd
+        if span == 0:
+            return 0.0
+        rel = (val - (mean - 3 * sd)) / span * 100.0
+        if inverted:
+            rel = 100.0 - rel
+        return max(0.0, min(100.0, rel))
+
+    import streamlit as st
+    pot_vo2max = float(st.session_state.get("pot_vo2max", 72.0))
+    pot_fat = float(st.session_state.get("pot_fat", 10.5))
+    pot_ans_rel = float(st.session_state.get("pot_ans_rel", 4.8))
+    pot_fatmax = float(st.session_state.get("pot_fatmax", 3.4))
+    pot_match = float(st.session_state.get("pot_match", 3.6))
+    pot_vlamax = float(st.session_state.get("pot_vlamax", 0.45))
+
+    vla_val = 0.6
+    try:
+        ans_row = df_res[df_res['Modell'].str.contains('OBLA 4.0', na=False)]
+        if not ans_row.empty:
+            vla_raw = ans_row.iloc[0].get('VLamax [mmol/l/s]', 0.6)
+            if pd.notna(vla_raw) and vla_raw != 'N/A' and 'bitte' not in str(vla_raw).lower():
+                vla_val = float(vla_raw)
+    except:
+        pass
+
+    v_ans = 3.5
+    ans_hf = 160.0
+    if not ans_row.empty:
+        try:
+            v_ans = float(ans_row.iloc[0].get('v', 3.5))
+            ans_hf = float(ans_row.iloc[0].get('HF', 160.0))
+        except:
+            pass
+
+    re_val = 210.0
+    valid_re = []
+    for i in range(len(speed)):
+        v_ms = speed[i]
+        vo2_r = vo2_steady_values[i] if i < len(vo2_steady_values) else 0.0
+        if vo2_r > 0:
+            valid_re.append(vo2_r / (v_ms * 3.6) * 60.0)
+    if len(valid_re) > 0:
+        re_val = np.mean(valid_re)
+
+    v_fatmax = v_ans * 0.78
+    v_kh_match = v_ans * 0.85
+
+    athlete_scores = [
+        normalize_ref_running(rel_vo2max,    'VO2max'),
+        normalize_ref_running(body_fat_pct,  'Fettanteil'),
+        normalize_ref_running(re_val,        'Laufökonomie'),
+        normalize_ref_running(v_ans,         'ANS'),
+        normalize_ref_running(v_fatmax,      'Fatmax'),
+        normalize_ref_running(v_kh_match,    'KH-Match'),
+        normalize_ref_running(vla_val,       'VLamax'),
+    ]
+    athlete_scores += athlete_scores[:1]
+
+    pot_v_ans = pot_ans_rel if pot_ans_rel < 10 else v_ans * 1.15
+    pot_v_fatmax = pot_fatmax if pot_fatmax < 10 else v_fatmax * 1.15
+    pot_v_match = pot_match if pot_match < 10 else v_kh_match * 1.15
+
+    potential_scores = [
+        normalize_ref_running(pot_vo2max,  'VO2max'),
+        normalize_ref_running(pot_fat,     'Fettanteil'),
+        normalize_ref_running(re_val * 0.95, 'Laufökonomie'),  # 5% improvement
+        normalize_ref_running(pot_v_ans,   'ANS'),
+        normalize_ref_running(pot_v_fatmax, 'Fatmax'),
+        normalize_ref_running(pot_v_match, 'KH-Match'),
+        normalize_ref_running(pot_vlamax,  'VLamax'),
+    ]
+    potential_scores += potential_scores[:1]
+
+    # Draw spokes (radial lines)
+    for t in angles[:-1]:
+        ax.plot([0, 100 * np.cos(t)], [0, 100 * np.sin(t)], color='#595a59', linestyle='-', linewidth=0.8, zorder=5)
+
+    # Draw outer heptagon spine boundary
+    ax.plot(x_100, y_100, color='#595a59', linewidth=1.2, zorder=8)
+
+    # Draw data lines
+    x_ath = [r * np.cos(t) for r, t in zip(athlete_scores, angles)]
+    y_ath = [r * np.sin(t) for r, t in zip(athlete_scores, angles)]
+    ax.plot(x_ath, y_ath, color='#1a1a1a', linewidth=3.0, zorder=6)
+    ax.fill(x_ath, y_ath, color='#1a1a1a', alpha=0.08, zorder=5)
+
+    x_pot = [r * np.cos(t) for r, t in zip(potential_scores, angles)]
+    y_pot = [r * np.sin(t) for r, t in zip(potential_scores, angles)]
+    ax.plot(x_pot, y_pot, color='#595a59', linewidth=2.0, linestyle='--', zorder=6)
+
+    # Add text labels manually
+    for i, label in enumerate(radar_labels):
+        t = angles[i]
+        r_label = 112
+        x = r_label * np.cos(t)
+        y = r_label * np.sin(t)
+        
+        ha = 'center'
+        if np.cos(t) > 0.1:
+            ha = 'left'
+        elif np.cos(t) < -0.1:
+            ha = 'right'
+            
+        va = 'center'
+        if np.sin(t) > 0.1:
+            va = 'bottom'
+        elif np.sin(t) < -0.1:
+            va = 'top'
+            
+        if abs(np.cos(t)) < 0.1:
+            if np.sin(t) > 0:
+                y += 2
+            else:
+                y -= 2
+                
+        ax.text(x, y, label, fontsize=5.0, fontweight='bold', color='#595a59', ha=ha, va=va)
+
+    ax.axis('off')
+    ax.set_xlim(-140, 140)
+    ax.set_ylim(-140, 140)
+    
+    legend_handles = [
+        Patch(facecolor='#cdb663', alpha=1.0,  label='Sehr gut'),
+        Patch(facecolor='#2cb7b9', alpha=1.0,  label='Gut'),
+        Patch(facecolor='#ffffff', edgecolor='#595a59', alpha=1.0,  label='Zu verbessern'),
+        Patch(facecolor='#595a59', alpha=1.0,  label='Schwach'),
+        Line2D([0], [0], color='#1a1a1a', lw=2, label='Daten Sportler'),
+        Line2D([0], [0], color='#595a59', lw=1.5, ls='--', label='Coaching Potential'),
+    ]
+    legend = ax.legend(handles=legend_handles, loc='lower center', bbox_to_anchor=(0.5, -0.15),
+                       ncol=3, fontsize=5, frameon=True, framealpha=0.9)
+    for text in legend.get_texts():
+        text.set_color('#595a59')
+        text.set_weight('bold')
+        
+    fig.patch.set_facecolor('white')
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_radar:
-        fig.savefig(tmp_radar.name, format="png", bbox_inches="tight")
+        fig.savefig(tmp_radar.name, format="png", bbox_inches="tight", facecolor='white')
         plt.close(fig)
-        pdf.image(tmp_radar.name, x=78.0, y=153.0, w=418.6, h=293.4)
+        
+        # Pad image to square to prevent stretching in FPDF
+        img = Image.open(tmp_radar.name)
+        w_img, h_img = img.size
+        max_dim = max(w_img, h_img)
+        new_img = Image.new("RGB", (max_dim, max_dim), (255, 255, 255))
+        new_img.paste(img, ((max_dim - w_img) // 2, (max_dim - h_img) // 2))
+        new_img.save(tmp_radar.name)
+        
+        pdf.image(tmp_radar.name, x=160.76, y=143.52, w=250.0, h=250.0)
         temp_files.append(tmp_radar.name)
 
     # Trainingsbereiche Table
-    draw_rect(57.6, 471.4, 207.0, 13.4, fill_color=c_teal)
-    draw_text(122.5, 472.6, "Trainingsbereiche", size=9.0, font_style='B', color=c_white)
+    draw_rect(57.6, 471.4, 207.0, 10.44, fill_color=c_teal)
+    draw_text_centered(57.6 + 207.0 / 2.0, 472.5, "Trainingsbereiche", size=8.2, font_style='B', color=c_white)
 
-    draw_text(99.3, 497.0, "Trainingsbereich", size=9.0, font_style='B', color=c_black)
-    draw_text(254.8, 497.0, "Geschwindigkeit", size=9.0, font_style='B', color=c_black)
-    draw_text(417.4, 497.0, "Herzfrequenz", size=9.0, font_style='B', color=c_black)
-    draw_text(275.3, 510.7, "[min/km]", size=8.3, color=c_black)
-    draw_text(435.8, 510.7, "[bpm]", size=8.3, color=c_black)
+    draw_text(99.3, 497.0, "Trainingsbereich", size=9.0, font_style='B', color=c_dark_grey)
+    draw_text(254.8, 497.0, "Geschwindigkeit", size=9.0, font_style='B', color=c_dark_grey)
+    draw_text(417.4, 497.0, "Herzfrequenz", size=9.0, font_style='B', color=c_dark_grey)
+    draw_text(275.3, 510.7, "[min/km]", size=8.3, color=c_dark_grey)
+    draw_text(435.8, 510.7, "[bpm]", size=8.3, color=c_dark_grey)
     
-    draw_text(231.8, 523.9, "min", size=8.3, font_style='B', color=c_black)
-    draw_text(282.6, 523.9, "max", size=8.3, font_style='B', color=c_black)
-    draw_text(335.5, 523.9, "Ziel", size=8.3, font_style='B', color=c_black)
-    draw_text(387.0, 523.9, "min", size=8.3, font_style='B', color=c_black)
-    draw_text(437.9, 523.9, "max", size=8.3, font_style='B', color=c_black)
-    draw_text(490.7, 523.9, "Ziel", size=8.3, font_style='B', color=c_black)
+    draw_text(231.8, 523.9, "min", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(282.6, 523.9, "max", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(335.5, 523.9, "Ziel", size=8.3, color=c_dark_grey)
+    draw_text(387.0, 523.9, "min", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(437.9, 523.9, "max", size=8.3, font_style='B', color=c_dark_grey)
+    draw_text(490.7, 523.9, "Ziel", size=8.3, color=c_dark_grey)
 
-    zones = [
-        "regenerativer Dauerlauf (DLreg)",
-        "extensiver Dauerlauf (DLext)",
-        "intensiver  Dauerlauf (DLint)",
-        "Tempodauerlauf (DLTempo)",
-        "extensives Tempotraining (TText)",
-        "intensives Tempotraining (TTint)"
-    ]
+    def format_pace(v):
+        if not isinstance(v, (int, float)) or v <= 0:
+            return "-"
+        seconds_per_km = 1000.0 / v
+        minutes = int(seconds_per_km // 60)
+        seconds = int(round(seconds_per_km % 60))
+        if seconds == 60:
+            minutes += 1
+            seconds = 0
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def format_hr(hr_val):
+        if not isinstance(hr_val, (int, float)) or hr_val <= 0:
+            return "-"
+        return str(int(round(hr_val)))
+
+    if v_ans > 0 and ans_hf > 0:
+        zones_data = [
+            ("regenerativer Dauerlauf (DLreg)",
+             "-", format_pace(v_ans * 0.68), format_pace(v_ans * 0.65),
+             "-", format_hr(ans_hf * 0.77), format_hr(ans_hf * 0.70)),
+            
+            ("extensiver Dauerlauf (DLext)",
+             format_pace(v_ans * 0.68), format_pace(v_ans * 0.79), format_pace(v_ans * 0.77),
+             format_hr(ans_hf * 0.77), format_hr(ans_hf * 0.85), format_hr(ans_hf * 0.80)),
+            
+            ("intensiver  Dauerlauf (DLint)",
+             format_pace(v_ans * 0.79), format_pace(v_ans * 0.93), format_pace(v_ans * 0.86),
+             format_hr(ans_hf * 0.85), format_hr(ans_hf * 0.95), format_hr(ans_hf * 0.91)),
+            
+            ("Tempodauerlauf (DLTempo)",
+             format_pace(v_ans * 0.93), format_pace(v_ans * 1.05), format_pace(v_ans * 0.99),
+             format_hr(ans_hf * 0.95), format_hr(ans_hf * 1.03), format_hr(ans_hf * 0.99)),
+            
+            ("extensives Tempotraining (TText)",
+             format_pace(v_ans * 1.05), format_pace(v_ans * 1.23), format_pace(v_ans * 1.13),
+             format_hr(ans_hf * 1.03), format_hr(ans_hf * 1.05), format_hr(ans_hf * 1.05)),
+            
+            ("intensives Tempotraining (TTint)",
+             format_pace(v_ans * 1.23), "max", format_pace(v_ans * 1.25),
+             format_hr(ans_hf * 1.05), "max", format_hr(ans_hf * 1.06)),
+        ]
+    else:
+        zones_data = [
+            ("regenerativer Dauerlauf (DLreg)", "-", "-", "-", "-", "-", "-"),
+            ("extensiver Dauerlauf (DLext)",     "-", "-", "-", "-", "-", "-"),
+            ("intensiver  Dauerlauf (DLint)",     "-", "-", "-", "-", "-", "-"),
+            ("Tempodauerlauf (DLTempo)",          "-", "-", "-", "-", "-", "-"),
+            ("extensives Tempotraining (TText)",  "-", "-", "-", "-", "-", "-"),
+            ("intensives Tempotraining (TTint)",  "-", "-", "-", "-", "-", "-"),
+        ]
+
     y_coords_s5 = [536.1, 549.4, 562.7, 576.0, 602.7, 616.0]
-    for zn, y_coord in zip(zones, y_coords_s5):
-        draw_text(59.3, y_coord, zn, size=8.3, font_style='B', color=c_black)
-        draw_text(231.8, y_coord, "-", size=8.3, color=c_black)
-        draw_text(282.6, y_coord, "-", size=8.3, color=c_black)
-        draw_text(335.5, y_coord, "-", size=8.3, color=c_black)
-        draw_text(387.0, y_coord, "-", size=8.3, color=c_black)
-        draw_text(437.9, y_coord, "-", size=8.3, color=c_black)
-        draw_text(490.7, y_coord, "-", size=8.3, color=c_black)
+    for (zn, p_min, p_max, p_zl, hr_mn, hr_mx, hr_zl), y_coord in zip(zones_data, y_coords_s5):
+        draw_text(59.3, y_coord, zn, size=8.3, font_style='B', color=c_dark_grey)
+        
+        # Speed min
+        if p_min == "-":
+            draw_text_centered(231.8 + 6.0, y_coord, "-", size=8.3, color=c_dark_grey)
+        else:
+            draw_text(231.8, y_coord, p_min, size=8.3, color=c_dark_grey)
+            
+        # Speed max
+        draw_text(282.6, y_coord, p_max, size=8.3, color=c_dark_grey)
+        
+        # Speed Ziel
+        draw_text(335.5, y_coord, p_zl, size=8.3, color=c_dark_grey)
+        
+        # HF min
+        if hr_mn == "-":
+            draw_text_centered(387.0 + 6.0, y_coord, "-", size=8.3, color=c_dark_grey)
+        else:
+            draw_text(387.0, y_coord, hr_mn, size=8.3, color=c_dark_grey)
+            
+        # HF max
+        draw_text(437.9, y_coord, hr_mx, size=8.3, color=c_dark_grey)
+        
+        # HF Ziel
+        draw_text(490.7, y_coord, hr_zl, size=8.3, color=c_dark_grey)
+
+    # Draw vertical separator lines
+    for x in [212.9, 368.8, 524.7]:
+        draw_rect(x, 522.0, 0.6, 104.0, fill_color=c_dark_grey)
+    # Draw bottom border
+    draw_rect(212.9, 625.4, 311.8, 0.6, fill_color=c_dark_grey)
 
     pdf_output = pdf.output(dest='S')
     
@@ -2709,7 +3010,7 @@ if start_button:
     st.markdown("---")
     if fig_laktat is not None:
         pdf_bytes = create_pdf(
-            athlete_name, birthdate, test_date, test_type, weight, body_fat_pct, rel_vo2max, df_res, fig_laktat,
+            athlete_name, birthdate, test_date, st.session_state.get("diagnostik_type", "Running BLUE"), weight, body_fat_pct, rel_vo2max, df_res, fig_laktat,
             coach, sportart, kategorie, height, speed, lactate, hr, vo2_steady_values, vo2_steady_abs, vco2_steady_abs, uploaded_file
         )
         
