@@ -121,7 +121,9 @@ metadata_defaults = [
     ("vo2_override", 4368.0),
     ("t_bel_manual", 13.2),
     ("t_alak_manual", 3.1),
-    ("diagnostik_type", "Cycling BLUE")
+    ("diagnostik_type", "Running BLUE"),
+    ("gender", "männlich"),
+    ("lauf_auswertung_gestartet", False)
 ]
 for key, val in metadata_defaults:
     if key not in st.session_state:
@@ -183,11 +185,15 @@ def sync_lauftest_input_df():
         })
         st.session_state.last_sync_params = (anzahl, start_v, v_increment)
     else:
-        last_sync = st.session_state.get("last_sync_params", (None, None, None))
-        if last_sync != (anzahl, start_v, v_increment):
-            df = st.session_state.df_lauftest_input
-            current_len = len(df)
-            
+        df = st.session_state.df_lauftest_input
+        current_len = len(df)
+        
+        expected_speeds = [0.0] + [round(start_v + (i * v_increment), 2) for i in range(anzahl)]
+        current_speeds = [round(float(s), 2) if pd.notna(s) else 0.0 for s in df["v (m/s)"].values]
+        
+        if current_len != target_len or current_speeds != expected_speeds:
+            if "lauftest_lac_editor_key" in st.session_state:
+                del st.session_state["lauftest_lac_editor_key"]
             if current_len != target_len:
                 if target_len > current_len:
                     new_rows = []
@@ -260,28 +266,45 @@ widget_keys_to_init = {
     "bf_lauft_key": float(st.session_state.body_fat_pct),
     "kategorie_lauft_key": st.session_state.kategorie,
     "coach_lauft_key": st.session_state.coach,
+    "gender": st.session_state.gender,
+    "gender_lauft_key": st.session_state.gender,
 }
 for key, val in widget_keys_to_init.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-def update_base_data(name, height, weight, birthdate, test_date):
+def update_base_data(name, height, weight, birthdate, test_date, gender=None):
     if name:
         st.session_state.athlete_name = name
         st.session_state.name_lauft_key = name
+        if st.session_state.get("sportart") == "Laufen":
+            st.session_state.athlete_name_lauft_widget = name
     if height is not None:
         st.session_state.height = int(height)
         st.session_state.height_lauft_key = int(height)
+        if st.session_state.get("sportart") == "Laufen":
+            st.session_state.height_lauft_widget = int(height)
     if weight is not None:
         w_rounded = round(float(weight), 1)
         st.session_state.weight = w_rounded
         st.session_state.weight_lauft_key = w_rounded
+        if st.session_state.get("sportart") == "Laufen":
+            st.session_state.weight_lauft_widget = w_rounded
     if birthdate:
         st.session_state.birthdate = birthdate
         st.session_state.birth_lauft_key = birthdate
+        if st.session_state.get("sportart") == "Laufen":
+            st.session_state.birthdate_lauft_widget = birthdate
     if test_date:
         st.session_state.test_date = test_date
         st.session_state.test_lauft_key = test_date
+        if st.session_state.get("sportart") == "Laufen":
+            st.session_state.test_date_lauft_widget = test_date
+    if gender:
+        st.session_state.gender = gender
+        st.session_state.gender_lauft_key = gender
+        if st.session_state.get("sportart") == "Laufen":
+            st.session_state.gender_lauft_widget = gender
 
 if "df_sf" not in st.session_state:
     sf_names = ["Wange", "Kinn", "Achselfalte vorn", "10. Rippe", "Bauch (Nabel)", "Spina illiaca", "Oberschenkel", "Rücken", "Triceps", "Wade"]
@@ -323,15 +346,86 @@ elif sportart == "Radsport":
     kategorie_options = ["Hobby", "Age-Grouper", "Amateur", "Profi"]
 
     # 0. File Uploaders placed at the very top of the sidebar
-    uploaded_srm = st.sidebar.file_uploader(
-        "Sprint-Rohdaten Excel hochladen (.xlsx)", 
-        type=["xlsx"], 
-        key="srm_sprint_key"
+    uploaded_sprint = st.sidebar.file_uploader(
+        "Sprintdatei hochladen (.xlsx, .srm, .fit)", 
+        type=["xlsx", "srm", "fit"], 
+        key="sprint_file_key"
     )
-    if uploaded_srm is not None and uploaded_srm.name != st.session_state.get("last_uploaded_srm"):
-        st.session_state.last_uploaded_srm = uploaded_srm.name
+    uploaded_spiro = st.sidebar.file_uploader(
+        "Spirodatei VO2max Rampe (10s) hochladen (.xlsx, .csv)", 
+        type=["xlsx", "csv"], 
+        key="spiro_rampe_key"
+    )
+    uploaded_fit = st.sidebar.file_uploader(
+        "VO2max Rampe .fit-Datei hochladen (.fit)", 
+        type=["fit"], 
+        key="fit_rampe_key"
+    )
+
+    st.sidebar.caption(
+        "Original SRM-Ergometer Datei (.srm), Garmin/SRM Export (.fit) oder Sprint-Excel-Datei (.xlsx) hochladen. "
+        "Power [W] und Trittfrequenz werden automatisch ausgelesen."
+    )
+
+    if uploaded_sprint is not None and uploaded_sprint.name != st.session_state.get("last_uploaded_sprint"):
+        st.session_state.last_uploaded_sprint = uploaded_sprint.name
+        _ext = os.path.splitext(uploaded_sprint.name)[1].lower()
+        
         try:
-            sprint_powers, sprint_times, sprint_cadences = parse_sprint_excel(uploaded_srm)
+            if _ext == ".xlsx":
+                # Excel-Datei parsen
+                sprint_powers, sprint_times, sprint_cadences = parse_sprint_excel(uploaded_sprint)
+                _src_name = uploaded_sprint.name
+                _format_info = "Excel"
+                # Rohdaten für Download löschen
+                if "sprint_records" in st.session_state:
+                    del st.session_state["sprint_records"]
+                if "last_uploaded_sprint_raw" in st.session_state:
+                    del st.session_state["last_uploaded_sprint_raw"]
+            else:
+                # SRM/FIT-Datei parsen
+                _suffix = _ext
+                with tempfile.NamedTemporaryFile(delete=False, suffix=_suffix) as tmp_raw:
+                    tmp_raw.write(uploaded_sprint.getvalue())
+                    tmp_raw_path = tmp_raw.name
+                
+                try:
+                    import importlib.util as _ilu
+                    _spec = _ilu.spec_from_file_location(
+                        "convert_sprint", 
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), "convert_sprint_to_excel.py")
+                    )
+                    _conv = _ilu.module_from_spec(_spec)
+                    _spec.loader.exec_module(_conv)
+                    
+                    _slope  = float(st.session_state.get("srm_slope", 1.0))
+                    _offset = float(st.session_state.get("srm_offset", 0.0))
+                    
+                    if _ext == ".srm":
+                        with open(tmp_raw_path, "rb") as _f:
+                            _srm_data = _f.read()
+                        _records, _hdr = _conv.parse_srm7_data(_srm_data, slope=_slope, zero_offset=_offset, trim_zeros=True)
+                        _rec_int_label = f"{_hdr['rec_int']}s (SRM)"
+                        _src_name = uploaded_sprint.name
+                    else:  # .fit
+                        _records, _ath, _date = _conv.parse_fit_file(tmp_raw_path, trim_zeros=True)
+                        _rec_int_label = "1s (FIT)"
+                        _src_name = uploaded_sprint.name
+                    
+                    if _records:
+                        sprint_powers = [float(r.get("power_w", r.get("power", 0))) for r in _records]
+                        sprint_times  = [float(r["elapsed_s"]) for r in _records]
+                        sprint_cadences = [float(r.get("cadence", 0)) for r in _records]
+                        st.session_state.sprint_records = _records
+                        st.session_state.last_uploaded_sprint_raw = uploaded_sprint.name
+                        st.session_state.sprint_rec_int_label = _rec_int_label
+                        _format_info = "0.1s (SRM)" if _ext == ".srm" else "1s (FIT)"
+                    else:
+                        raise ValueError("Keine Leistungsdaten gefunden.")
+                finally:
+                    if os.path.exists(tmp_raw_path):
+                        os.unlink(tmp_raw_path)
+            
             if len(sprint_powers) > 0:
                 p_max = max(sprint_powers)
                 t_pmax_list = [t for p, t in zip(sprint_powers, sprint_times) if p == p_max]
@@ -357,154 +451,19 @@ elif sportart == "Radsport":
                 st.session_state.sprint_powers = sprint_powers
                 st.session_state.sprint_times = sprint_times
                 st.session_state.sprint_cadences = sprint_cadences
-                st.session_state.rad_auswertung_gestartet = False
-                st.rerun()
-        except Exception as e:
-            st.error(f"Fehler beim Auslesen der Sprintdatei: {e}")
-
-
-    # --- Sprint .srm oder .fit Datei hochladen ---
-    st.sidebar.markdown("**Sprint .srm / .fit hochladen** *(Aktuell noch in der Testphase)*")
-    st.sidebar.caption(
-        "Optional: Wird keine Rohdatei hochgeladen, muss mindestens eine Sprint-Excel-Datei "
-        "(.xlsx) vorhanden sein."
-    )
-
-    # Slope und Zero-Offset Eingabe (für SRM-Kalibrierung)
-    with st.sidebar.expander("SRM Kalibrierung (Slope / Zero-Offset)", expanded=False):
-        st.caption("Diese Werte stehen auf dem SRM PowerControl oder im SRM-Protokoll.")
-        _srm_slope  = st.number_input("Slope [W/count]", 
-                                       value=float(st.session_state.get("srm_slope", 1.0)), 
-                                       step=0.001, format="%.3f", key="srm_slope_input")
-        _srm_offset = st.number_input("Zero-Offset [counts]",
-                                       value=float(st.session_state.get("srm_offset", 0.0)),
-                                       step=1.0, format="%.1f", key="srm_offset_input")
-        st.session_state.srm_slope  = _srm_slope
-        st.session_state.srm_offset = _srm_offset
-        st.caption("Standard: Slope=1.0, Offset=0 → Raw-Werte werden direkt als Watt übernommen.")
-
-    uploaded_sprint_raw = st.sidebar.file_uploader(
-        "Sprint-Rohdaten hochladen (.srm oder .fit)", 
-        type=["srm", "fit"], 
-        key="sprint_raw_key"
-    )
-    
-    if uploaded_sprint_raw is not None and uploaded_sprint_raw.name != st.session_state.get("last_uploaded_sprint_raw"):
-        st.session_state.last_uploaded_sprint_raw = uploaded_sprint_raw.name
-        _ext = os.path.splitext(uploaded_sprint_raw.name)[1].lower()
-        _suffix = _ext if _ext in [".srm", ".fit"] else ".tmp"
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=_suffix) as tmp_raw:
-            tmp_raw.write(uploaded_sprint_raw.getvalue())
-            tmp_raw_path = tmp_raw.name
-        
-        try:
-            # convert_sprint_to_excel als Modul importieren
-            import importlib.util as _ilu
-            _spec = _ilu.spec_from_file_location(
-                "convert_sprint", 
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "convert_sprint_to_excel.py")
-            )
-            _conv = _ilu.module_from_spec(_spec)
-            _spec.loader.exec_module(_conv)
-            
-            _slope  = float(st.session_state.get("srm_slope", 1.0))
-            _offset = float(st.session_state.get("srm_offset", 0.0))
-            
-            if _ext == ".srm":
-                with open(tmp_raw_path, "rb") as _f:
-                    _srm_data = _f.read()
-                _records, _hdr = _conv.parse_srm7_data(_srm_data, slope=_slope, zero_offset=_offset, trim_zeros=True)
-                _rec_int_label = f"{_hdr['rec_int']}s (SRM)"
-                _src_name = uploaded_sprint_raw.name
-            else:  # .fit
-                _records, _ath, _date = _conv.parse_fit_file(tmp_raw_path, trim_zeros=True)
-                _rec_int_label = "1s (FIT)"
-                _src_name = uploaded_sprint_raw.name
-            
-            if _records:
-                _sprint_powers = [float(r.get("power_w", r.get("power", 0))) for r in _records]
-                _sprint_times  = [float(r["elapsed_s"]) for r in _records]
-                _sprint_cadences = [float(r.get("cadence", 0)) for r in _records]
-                
-                _p_max = max(_sprint_powers)
-                _t_pmax_list = [t for p, t in zip(_sprint_powers, _sprint_times) if p == _p_max]
-                _t_pmax_last = max(_t_pmax_list) if _t_pmax_list else 0.0
-                _t_alak = None
-                _p_threshold = _p_max * 0.965
-                for p, t in zip(_sprint_powers, _sprint_times):
-                    if t > _t_pmax_last and p < _p_threshold:
-                        _t_alak = t
-                        break
-                if _t_alak is None:
-                    _times_after_pmax = [t for t in _sprint_times if t > _t_pmax_last]
-                    _t_alak = _times_after_pmax[-1] if _times_after_pmax else (_t_pmax_last + 0.1)
-                _t_bel  = max(_sprint_times)
-                
-                st.session_state.t_bel_auto    = round(_t_bel, 1)
-                st.session_state.t_alak_auto   = round(_t_alak, 1)
-                st.session_state.t_bel_manual  = round(_t_bel, 1)
-                st.session_state.t_alak_manual = round(_t_alak, 1)
-                st.session_state.t_bel   = round(_t_bel, 1)
-                st.session_state.t_alak  = round(_t_alak, 1)
-                st.session_state.t_glyc  = round(_t_bel - _t_alak, 1)
-                st.session_state.sprint_powers  = _sprint_powers
-                st.session_state.sprint_times   = _sprint_times
-                st.session_state.sprint_cadences = _sprint_cadences
-                st.session_state.sprint_records = _records   # für Excel-Download
-                st.session_state.sprint_rec_int_label = _rec_int_label
                 st.session_state.sprint_src_name = _src_name
                 st.session_state.rad_auswertung_gestartet = False
                 
-                _n = len(_sprint_powers)
-                _format_info = "0.1s (SRM)" if _ext == ".srm" else "1s (FIT)"
-                st.success(f"✅ Geladen [{_format_info}]: {_n} Punkte, Max {int(_p_max)}W, Dauer {_t_bel:.1f}s — Nullwerte am Anfang automatisch entfernt.")
+                st.success(f"✅ Geladen [{_format_info}]: {len(sprint_powers)} Punkte, Max {int(p_max)}W, Dauer {t_bel:.1f}s — Nullwerte am Anfang automatisch entfernt.")
                 st.rerun()
             else:
-                st.warning("Keine Leistungsdaten mit Power > 0 gefunden.")
-        
-        except Exception as _e:
-            st.error(f"Fehler beim Einlesen der Datei: {_e}")
-        finally:
-            if os.path.exists(tmp_raw_path):
-                os.unlink(tmp_raw_path)
+                st.warning("Keine Leistungsdaten gefunden.")
+        except Exception as e:
+            st.error(f"Fehler beim Auslesen der Sprintdatei: {e}")
 
-    # Download-Button: konvertierte Excel aus SRM/FIT erstellen
-    if "sprint_records" in st.session_state and st.session_state.get("last_uploaded_sprint_raw"):
-        try:
-            import importlib.util as _ilu2
-            _spec2 = _ilu2.spec_from_file_location(
-                "convert_sprint2",
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "convert_sprint_to_excel.py")
-            )
-            _conv2 = _ilu2.module_from_spec(_spec2)
-            _spec2.loader.exec_module(_conv2)
-            
-            _dl_bytes = _conv2.create_sprint_excel_bytes(
-                records=st.session_state.sprint_records,
-                athlete_name=st.session_state.get("athlete_name", ""),
-                test_date=st.session_state.get("test_date", ""),
-                source_filename=st.session_state.get("sprint_src_name", "sprint"),
-                rec_int_label=st.session_state.get("sprint_rec_int_label", ""),
-            )
-            _dl_name = st.session_state.get("last_uploaded_sprint_raw", "sprint").rsplit(".", 1)[0] + "_Data_Sprint.xlsx"
-            st.sidebar.download_button(
-                label="📥 Sprint Excel herunterladen",
-                data=_dl_bytes,
-                file_name=_dl_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_sprint_excel_key"
-            )
-        except Exception:
-            pass  # Download optional
+    # Converted Sprint Excel download button has been moved below the form.
 
-
-
-    uploaded_spiro = st.sidebar.file_uploader(
-        "Spirodatei VO2max Rampe (10s) hochladen (.xlsx, .csv)", 
-        type=["xlsx", "csv"], 
-        key="spiro_rampe_key"
-    )
+    # Spiro uploader moved to the top of sidebar
     if uploaded_spiro is not None and uploaded_spiro.name != st.session_state.get("last_uploaded_spiro"):
         st.session_state.last_uploaded_spiro = uploaded_spiro.name
         try:
@@ -557,11 +516,7 @@ elif sportart == "Radsport":
         except Exception as e:
             st.error(f"Fehler beim Auslesen der Spirodatei: {e}")
 
-    uploaded_fit = st.sidebar.file_uploader(
-        "VO2max Rampe .fit-Datei hochladen (.fit)", 
-        type=["fit"], 
-        key="fit_rampe_key"
-    )
+    # FIT uploader moved to the top of sidebar
     if uploaded_fit is not None and uploaded_fit.name != st.session_state.get("last_uploaded_fit"):
         st.session_state.last_uploaded_fit = uploaded_fit.name
         with tempfile.NamedTemporaryFile(delete=False, suffix=".fit") as tmp:
@@ -664,6 +619,11 @@ elif sportart == "Radsport":
             kategorie = st.selectbox("Kategorie", options=kategorie_options, index=kategorie_options.index(kategorie_val))
             st.session_state.kategorie = kategorie
 
+            gender_options = ["männlich", "weiblich"]
+            gender_val = st.session_state.get("gender", "männlich")
+            gender = st.selectbox("Geschlecht", options=gender_options, index=gender_options.index(gender_val))
+            st.session_state.gender = gender
+
             diag_type_options = ["Cycling WHITE", "Cycling BLUE", "Cycling GOLD"]
             diag_type_val = st.session_state.get("diagnostik_type", "Cycling BLUE")
             if diag_type_val not in diag_type_options:
@@ -708,36 +668,46 @@ elif sportart == "Radsport":
                 key="sprint_lac_editor_key"
             )
         
-        st.subheader("Sprinttest Parameter")
-        t_bel_auto = float(st.session_state.get("t_bel_auto", 13.2))
-        t_alak_auto = float(st.session_state.get("t_alak_auto", 3.1))
-        t_glyc_auto = round(t_bel_auto - t_alak_auto, 1)
-        
-        t_bel_manual = float(st.session_state.get("t_bel_manual", 13.2))
-        t_alak_manual = float(st.session_state.get("t_alak_manual", 3.1))
-        t_glyc_manual = round(t_bel_manual - t_alak_manual, 1)
-        
-        st.markdown(f"""
-        | Parameter | Auto (Excel) | Manuell |
-        | :--- | :--- | :--- |
-        | **t_bel [s]** | {t_bel_auto:.1f} | {t_bel_manual:.1f} |
-        | **t_alak [s]** | {t_alak_auto:.1f} | {t_alak_manual:.1f} |
-        | **t_glyc [s]** | {t_glyc_auto:.1f} | {t_glyc_manual:.1f} |
-        """)
-        
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            t_bel_manual_input = st.number_input("Manuelle t_bel [s]", value=float(st.session_state.t_bel_manual), step=0.1, format="%.1f")
-            st.session_state.t_bel_manual = round(t_bel_manual_input, 1)
-        with col_t2:
-            t_alak_manual_input = st.number_input("Manuelle t_alak [s]", value=float(st.session_state.t_alak_manual), step=0.1, format="%.1f")
-            st.session_state.t_alak_manual = round(t_alak_manual_input, 1)
-                
-        sprint_source = st.selectbox(
-            "Aktive Quelle für Sprinttest",
-            ["Automatisch aus Excel-Rohdaten", "Manuelle Anpassung"],
-            key="sprint_source_key"
-        )
+            st.subheader("Sprinttest Parameter")
+            t_bel_auto = float(st.session_state.get("t_bel_auto", 13.2))
+            t_alak_auto = float(st.session_state.get("t_alak_auto", 3.1))
+            t_glyc_auto = round(t_bel_auto - t_alak_auto, 1)
+            
+            t_bel_manual = float(st.session_state.get("t_bel_manual", 13.2))
+            t_alak_manual = float(st.session_state.get("t_alak_manual", 3.1))
+            t_glyc_manual = round(t_bel_manual - t_alak_manual, 1)
+            
+            st.markdown(f"""
+            | Parameter | Auto (Excel) | Manuell |
+            | :--- | :--- | :--- |
+            | **t_bel [s]** | {t_bel_auto:.1f} | {t_bel_manual:.1f} |
+            | **t_alak [s]** | {t_alak_auto:.1f} | {t_alak_manual:.1f} |
+            | **t_glyc [s]** | {t_glyc_auto:.1f} | {t_glyc_manual:.1f} |
+            """)
+            
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                t_bel_manual_input = st.number_input("Manuelle t_bel [s]", value=float(st.session_state.t_bel_manual), step=0.1, format="%.1f")
+                st.session_state.t_bel_manual = round(t_bel_manual_input, 1)
+            with col_t2:
+                t_alak_manual_input = st.number_input("Manuelle t_alak [s]", value=float(st.session_state.t_alak_manual), step=0.1, format="%.1f")
+                st.session_state.t_alak_manual = round(t_alak_manual_input, 1)
+                    
+            sprint_source = st.selectbox(
+                "Aktive Quelle für Sprinttest",
+                ["Automatisch aus Excel-Rohdaten", "Manuelle Anpassung"],
+                key="sprint_source_key"
+            )
+
+            st.subheader("SRM Kalibrierung")
+            _srm_slope  = st.number_input("Slope [W/count]", 
+                                           value=float(st.session_state.get("srm_slope", 1.0)), 
+                                           step=0.001, format="%.3f", key="srm_slope_input")
+            _srm_offset = st.number_input("Zero-Offset [counts]",
+                                           value=float(st.session_state.get("srm_offset", 0.0)),
+                                           step=1.0, format="%.1f", key="srm_offset_input")
+            st.session_state.srm_slope  = _srm_slope
+            st.session_state.srm_offset = _srm_offset
 
         # 3. Rampentest Expander (Default collapsed)
         with st.expander("Rampentest", expanded=False):
@@ -794,25 +764,36 @@ elif sportart == "Radsport":
             carb_intake_factor = float(st.session_state.carb_intake_factor)
 
         # 4. Coaching Potential Overrides (Default collapsed)
-        with st.expander("Coaching Potential Overrides", expanded=False):
-            st.caption("Optional: Werte für das Coaching-Potential-Spinnennetz auf Seite 4 des Berichts.")
-            pot_vo2max = st.number_input("Potential VO2max rel. [ml/min/kg]", value=float(st.session_state.get("pot_vo2max", 72.0)), step=0.5)
-            pot_fat = st.number_input("Potential Fettanteil [%]", value=float(st.session_state.get("pot_fat", 10.5)), step=0.1)
-            pot_ans_abs = st.number_input("Potential ANS abs. [W]", value=float(st.session_state.get("pot_ans_abs", 295.0)), step=5.0)
-            pot_ans_rel = st.number_input("Potential ANS rel. [W/kg]", value=float(st.session_state.get("pot_ans_rel", 4.8)), step=0.1)
-            pot_fatmax = st.number_input("Potential Fatmax [W/kg]", value=float(st.session_state.get("pot_fatmax", 3.4)), step=0.1)
-            pot_pmax = st.number_input("Potential Max. Leistung [W/kg]", value=float(st.session_state.get("pot_pmax", 14.5)), step=0.1)
-            pot_match = st.number_input("Potential KH-Match [W/kg]", value=float(st.session_state.get("pot_match", 3.6)), step=0.1)
-            pot_vlamax = st.number_input("Potential VLamax [mmol/L/s]", value=float(st.session_state.get("pot_vlamax", 0.45)), step=0.01)
+        with st.expander("Potential Overrides", expanded=False):
+            st.caption("Simuliere den Effekt von Anpassungen bei VO2max, VLamax oder Gewicht.")
+            pot_vo2_sel = st.selectbox(
+                "VO2max Potential",
+                ["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"],
+                index=["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"].index(st.session_state.get("pot_vo2_select_key", "Keine Änderung")),
+                key="pot_vo2_select_key"
+            )
+            pot_vla_sel = st.selectbox(
+                "VLamax Potential",
+                ["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"],
+                index=["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"].index(st.session_state.get("pot_vla_select_key", "Keine Änderung")),
+                key="pot_vla_select_key"
+            )
+            pot_weight_sel = st.selectbox(
+                "Gewicht Potential",
+                ["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"],
+                index=["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"].index(st.session_state.get("pot_weight_select_key", "Keine Änderung")),
+                key="pot_weight_select_key"
+            )
             
-            st.session_state.pot_vo2max = pot_vo2max
-            st.session_state.pot_fat = pot_fat
-            st.session_state.pot_ans_abs = pot_ans_abs
-            st.session_state.pot_ans_rel = pot_ans_rel
-            st.session_state.pot_fatmax = pot_fatmax
-            st.session_state.pot_pmax = pot_pmax
-            st.session_state.pot_match = pot_match
-            st.session_state.pot_vlamax = pot_vlamax
+            if st.session_state.get("rad_auswertung_gestartet", False):
+                st.markdown(f"""
+                **Simuliertes Coaching-Potential:**
+                * **Gewicht:** {st.session_state.get('pot_weight_val', st.session_state.weight):.1f} kg
+                * **VO2max:** {st.session_state.get('pot_vo2max', 72.0):.1f} ml/min/kg
+                * **VLamax:** {st.session_state.get('pot_vlamax', 0.45):.3f} mmol/L/s
+                * **ANS:** {int(st.session_state.get('pot_ans_abs', 295.0))} W ({st.session_state.get('pot_ans_rel', 4.8):.2f} W/kg)
+                * **Fatmax:** {st.session_state.get('pot_fatmax', 3.4):.2f} W/kg
+                """)
 
         st.markdown("---")
         start_button_rad = st.form_submit_button("Auswertung starten", type="primary")
@@ -820,6 +801,35 @@ elif sportart == "Radsport":
             st.session_state.rad_auswertung_gestartet = True
             st.session_state.df_sprint_lac = edited_sprint_lac
             st.session_state.df_sf = edited_sf
+            
+    # Download-Button: konvertierte Excel aus SRM/FIT erstellen (outside the form)
+    if "sprint_records" in st.session_state and st.session_state.get("last_uploaded_sprint_raw"):
+        try:
+            import importlib.util as _ilu2
+            _spec2 = _ilu2.spec_from_file_location(
+                "convert_sprint2",
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "convert_sprint_to_excel.py")
+            )
+            _conv2 = _ilu2.module_from_spec(_spec2)
+            _spec2.loader.exec_module(_conv2)
+            
+            _dl_bytes = _conv2.create_sprint_excel_bytes(
+                records=st.session_state.sprint_records,
+                athlete_name=st.session_state.get("athlete_name", ""),
+                test_date=st.session_state.get("test_date", ""),
+                source_filename=st.session_state.get("sprint_src_name", "sprint"),
+                rec_int_label=st.session_state.get("sprint_rec_int_label", ""),
+            )
+            _dl_name = st.session_state.get("last_uploaded_sprint", "sprint").rsplit(".", 1)[0] + "_Data_Sprint.xlsx"
+            st.sidebar.download_button(
+                label="📥 Sprint Excel herunterladen",
+                data=_dl_bytes,
+                file_name=_dl_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_sprint_excel_key"
+            )
+        except Exception:
+            pass  # Download optional
         
     # 6. RENDER MAIN PAGE LAYOUT
     if st.session_state.rad_auswertung_gestartet:
@@ -1002,6 +1012,118 @@ elif sportart == "Radsport":
         fett_kg = weight * (body_fat_pct / 100.0)
         fettfrei_kg = weight - fett_kg
         vo2_ffm = abs_vo2max / fettfrei_kg if fettfrei_kg > 0 else 0.0
+        
+        # E. Coaching Potential Overrides Recalculation
+        pot_vo2_sel = st.session_state.get("pot_vo2_select_key", "Keine Änderung")
+        pot_vla_sel = st.session_state.get("pot_vla_select_key", "Keine Änderung")
+        pot_weight_sel = st.session_state.get("pot_weight_select_key", "Keine Änderung")
+        
+        def parse_sel_pct(sel_str):
+            if "+2" in sel_str: return 0.02
+            if "+5" in sel_str: return 0.05
+            if "-2" in sel_str: return -0.02
+            if "-5" in sel_str: return -0.05
+            return 0.0
+            
+        vo2_change = parse_sel_pct(pot_vo2_sel)
+        vla_change = parse_sel_pct(pot_vla_sel)
+        weight_change = parse_sel_pct(pot_weight_sel)
+        
+        pot_weight = weight * (1.0 + weight_change)
+        pot_abs_vo2max = abs_vo2max * (1.0 + vo2_change)
+        pot_rel_vo2max = pot_abs_vo2max / pot_weight if pot_weight > 0 else 0.0
+        pot_vlamax = vlamax * (1.0 + vla_change)
+        
+        # Save values for display in the expander and pass to PDF
+        st.session_state.pot_weight_val = pot_weight
+        st.session_state.pot_vlamax = pot_vlamax
+        st.session_state.pot_vo2max = pot_rel_vo2max
+        st.session_state.pot_fat = body_fat_pct
+        
+        # Run potential metabolic simulation
+        pot_sim_results = []
+        for p in range(601):
+            vo2ss = (p * ks4 / pot_weight) + vo2_rest
+            if pot_rel_vo2max - vo2ss > 0:
+                adp = np.sqrt((ks1 * vo2ss) / (pot_rel_vo2max - vo2ss))
+            else:
+                adp = np.nan
+            adp_3 = adp ** 3 if not np.isnan(adp) else np.nan
+            vlass = (pot_vlamax * 60.0) / (1.0 + ks2 / adp_3) if not np.isnan(adp_3) and adp_3 > 0 else np.nan
+            vlaoxmax = (lac_eq / lac_dist) * vo2ss
+            pyruvat_def = vlaoxmax - vlass if not np.isnan(vlass) else np.nan
+            kh_pct = (vlass / vlaoxmax * 100.0) if vlaoxmax > 0 and not np.isnan(vlass) else np.nan
+            fat_pct = 100.0 - kh_pct if not np.isnan(kh_pct) else np.nan
+            
+            if not np.isnan(kh_pct):
+                kh_pct_capped = max(0.0, min(100.0, kh_pct))
+                fat_pct_capped = max(0.0, min(100.0, 100.0 - kh_pct_capped))
+            else:
+                kh_pct_capped = np.nan
+                fat_pct_capped = np.nan
+                
+            rq = 0.7 + 0.3 * (kh_pct_capped / 100.0) if not np.isnan(kh_pct_capped) else np.nan
+            ae = (((rq - 0.7) * 0.05094) * 100.0) + 19.6 if not np.isnan(rq) else np.nan
+            vo2_abs_ss = vo2ss * pot_weight
+            ee_gesamt = ((vo2_abs_ss / 1000.0) * ae / 4.186) * 60.0 if not np.isnan(ae) else np.nan
+            ee_fett = ee_gesamt * (fat_pct_capped / 100.0) if not np.isnan(ee_gesamt) and not np.isnan(fat_pct_capped) else np.nan
+            ee_kh_g = (ee_gesamt * (kh_pct_capped / 100.0)) / 4.063 if not np.isnan(ee_gesamt) and not np.isnan(kh_pct_capped) else np.nan
+            
+            pot_sim_results.append({
+                'power': p,
+                'vo2ss': vo2ss,
+                'vlass': vlass,
+                'vlaoxmax': vlaoxmax,
+                'pyruvat_def': pyruvat_def,
+                'kh_pct': kh_pct_capped,
+                'fat_pct': fat_pct_capped,
+                'rq': rq,
+                'ee_gesamt': ee_gesamt,
+                'ee_fett': ee_fett,
+                'ee_kh_g': ee_kh_g
+            })
+            
+        df_pot_sim = pd.DataFrame(pot_sim_results)
+        
+        # Calculate pot_ans_power
+        pot_ans_df = df_pot_sim[df_pot_sim['vlass'] > df_pot_sim['vlaoxmax']].copy()
+        if not pot_ans_df.empty:
+            diff = pot_ans_df['vlass'] - pot_ans_df['vlaoxmax']
+            min_diff_idx = diff.idxmin()
+            pot_ans_power = int(df_pot_sim.loc[min_diff_idx, 'power'])
+        else:
+            pot_ans_power = 0
+            
+        pot_ans_rel = pot_ans_power / pot_weight if pot_weight > 0 else 0.0
+        
+        # Calculate pot_fatmax_power
+        pot_fatmax_df = df_pot_sim.dropna(subset=['pyruvat_def']).copy()
+        pot_fatmax_idx = pot_fatmax_df['pyruvat_def'].idxmax()
+        pot_fatmax_row = df_pot_sim.loc[pot_fatmax_idx]
+        pot_fatmax_power = int(pot_fatmax_row['power'])
+        pot_fatmax_rel = pot_fatmax_power / pot_weight if pot_weight > 0 else 0.0
+        
+        # pot_match_power
+        pot_carb_intake = carb_intake_factor * pot_weight
+        pot_carb_match_df = df_pot_sim[df_pot_sim['ee_kh_g'] <= pot_carb_intake]
+        if not pot_carb_match_df.empty:
+            pot_carb_match_power = int(pot_carb_match_df['power'].max())
+        else:
+            pot_carb_match_power = 0
+        pot_match_rel = pot_carb_match_power / pot_weight if pot_weight > 0 else 0.0
+        
+        # pot_pmax_rel
+        pot_sprint_powers = st.session_state.get("sprint_powers", [])
+        if not pot_sprint_powers or len(pot_sprint_powers) < 2:
+            pot_sprint_powers = [max(0.0, 1200.0 * (1.0 - ((t - 2.0)**2) / 64.0)) for t in [i * 0.1 for i in range(120)]]
+        pot_max_sprint_power = np.max(pot_sprint_powers)
+        pot_pmax_rel = pot_max_sprint_power / pot_weight if pot_weight > 0 else 0.0
+        
+        st.session_state.pot_ans_abs = float(pot_ans_power)
+        st.session_state.pot_ans_rel = float(pot_ans_rel)
+        st.session_state.pot_fatmax = float(pot_fatmax_rel)
+        st.session_state.pot_match = float(pot_match_rel)
+        st.session_state.pot_pmax = float(pot_pmax_rel)
         
         # Render Main Panels
         st.markdown(f"""
@@ -1404,7 +1526,8 @@ elif sportart == "Radsport":
                     pot_fatmax=pot_fatmax,
                     pot_pmax=pot_pmax,
                     pot_match=pot_match,
-                    pot_vlamax=pot_vlamax
+                    pot_vlamax=pot_vlamax,
+                    gender=st.session_state.get("gender", "männlich")
                 )
             except Exception as e:
                 import traceback
@@ -1430,6 +1553,7 @@ elif sportart == "Radsport":
         st.markdown(f"""
             <div style="font-size: 16px; line-height: 1.5; margin-bottom: 20px;">
                 <b>Athlet:</b> {athlete_name}<br>
+                <b>Geschlecht:</b> {st.session_state.get("gender", "männlich")}<br>
                 <b>Sportart:</b> Radsport<br>
                 <b>Test-Datum:</b> {test_date}
             </div>
@@ -1452,16 +1576,70 @@ elif sportart == "Radsport":
             else:
                 st.warning("Keine .fit-Datei hochgeladen")
         with c3:
-            if uploaded_srm is not None:
-                st.success(f"Sprint-Exceldatei geladen:\n{uploaded_srm.name}")
+            if uploaded_sprint is not None:
+                st.success(f"Sprintdatei geladen:\n{uploaded_sprint.name}")
+            elif st.session_state.get("sprint_src_name"):
+                st.success(f"Sprintdatei geladen:\n{st.session_state.sprint_src_name}")
             else:
-                st.warning("Keine Sprint-Exceldatei hochgeladen")
+                st.warning("Keine Sprintdatei hochgeladen")
                 
         st.subheader("Eingegebene Laktatwerte")
         st.dataframe(st.session_state.df_sprint_lac, hide_index=True, width='stretch')
         
     st.stop()
 
+
+# Testprotokoll selection placed at the very top of the sidebar for Laufauswertung
+test_types = [
+    "HYCYS Standart (5min / +0,4m/s)",
+    "Neues Protokoll (3min / +1km/h bzw. 0,278m/s)"
+]
+test_type = st.sidebar.selectbox("Testprotokoll", options=test_types, key="test_type_lauft_widget")
+
+selected_model_name = "OBLA 4.0 (ANS)"
+if test_type == "Neues Protokoll (3min / +1km/h bzw. 0,278m/s)":
+    selected_model_name = st.sidebar.selectbox(
+        "Auswertungs-Schwelle",
+        options=["OBLA 4.0 (ANS)", "Dmax (Standard)", "Modified Dmax", "LTP1", "LTP2"],
+        index=0,
+        key="selected_threshold_model_widget"
+    )
+
+if test_type != st.session_state.last_test_type:
+    st.session_state.last_test_type = test_type
+    if test_type == "HYCYS Standart (5min / +0,4m/s)":
+        st.session_state.start_v = 2.8
+        st.session_state.v_increment = 0.400
+        st.session_state.anzahl = 5
+        st.session_state.stufendauer = 5.0
+    elif test_type == "Neues Protokoll (3min / +1km/h bzw. 0,278m/s)":
+        st.session_state.start_v = 2.22
+        st.session_state.v_increment = 0.278
+        st.session_state.anzahl = 8
+        st.session_state.stufendauer = 3.0
+    # Ruhemessung and Pausendauer always 60s and 30s
+    st.session_state.vorlauf = 60
+    st.session_state.pausendauer = 30
+    
+    # Programmatically update the widgets' internal session state keys
+    st.session_state.start_v_lauft_widget = st.session_state.start_v
+    st.session_state.v_increment_lauft_widget = st.session_state.v_increment
+    st.session_state.anzahl_lauft_widget = st.session_state.anzahl
+    st.session_state.stufendauer_lauft_widget = st.session_state.stufendauer
+    st.session_state.vorlauf_lauft_widget = st.session_state.vorlauf
+    st.session_state.pausendauer_lauft_widget = st.session_state.pausendauer
+    
+    # Clear lactate table and editor states to force full rebuild
+    if "df_lauftest_input" in st.session_state:
+        del st.session_state["df_lauftest_input"]
+    if "lauftest_lac_editor_key" in st.session_state:
+        del st.session_state["lauftest_lac_editor_key"]
+    st.session_state.lauf_auswertung_gestartet = False
+    for key in list(st.session_state.keys()):
+        if key.startswith("lauftest_end_t_") or key.startswith("lauftest_offset_"):
+            del st.session_state[key]
+        
+    st.rerun()
 
 # Parse uploaded file if it has changed to update metadata
 uploaded_file = st.sidebar.file_uploader("Spiro-Datei hochladen (.xlsx oder .csv)", type=["xlsx", "csv"], key="uploaded_file_key")
@@ -1473,6 +1651,57 @@ vo2max_override = st.sidebar.number_input(
     help="Ermöglicht das manuelle Überschreiben des berechneten VO2max-Wertes (z.B. 3652 für Barbara Bauer)"
 )
 
+# Step parameters (outside the form so changing 'anzahl' immediately syncs the table)
+start_v = st.sidebar.number_input("Startgeschwindigkeit (m/s)", value=float(st.session_state.start_v), step=0.1, key="start_v_lauft_widget")
+st.session_state.start_v = start_v
+
+v_increment = st.sidebar.number_input("Geschwindigkeitssteigerung (m/s)", value=float(st.session_state.v_increment), step=0.001, format="%.3f", key="v_increment_lauft_widget")
+st.session_state.v_increment = v_increment
+
+anzahl = st.sidebar.number_input("Anzahl Stufen", value=int(st.session_state.anzahl), min_value=1, max_value=20, step=1, key="anzahl_lauft_widget")
+st.session_state.anzahl = anzahl
+
+# Collapsible Protokoll-Setup expander (outside the form)
+with st.sidebar.expander("Protokoll-Setup", expanded=False):
+    vorlauf = st.number_input("Ruhemessung (Sekunden)", value=int(st.session_state.vorlauf), step=10, key="vorlauf_lauft_widget")
+    st.session_state.vorlauf = vorlauf
+    
+    stufendauer = st.number_input("Stufendauer (Minuten)", value=float(st.session_state.stufendauer), step=0.5, key="stufendauer_lauft_widget")
+    st.session_state.stufendauer = stufendauer
+    
+    pausendauer = st.number_input("Pausendauer (Sekunden)", value=int(st.session_state.pausendauer), step=5, key="pausendauer_lauft_widget")
+    st.session_state.pausendauer = pausendauer
+    
+    ausbelastung = st.checkbox("Test bis zur Ausbelastung", value=True, key="ausbelastung_lauft_widget")
+
+# Collapsible Spiro-Fenster Feineinstellung expander (outside the form)
+if uploaded_file is not None:
+    with st.sidebar.expander("Spiro-Fenster Feineinstellung", expanded=False):
+        st.caption("Endzeitpunkt (in Sekunden) jeder Stufe eingeben:")
+        anz = int(st.session_state.anzahl)
+        stage_sec = int(st.session_state.stufendauer * 60)
+        pause_sec = int(st.session_state.pausendauer)
+        vorlauf = int(st.session_state.vorlauf)
+        
+        for i in range(anz):
+            if "detected_stage_ends" in st.session_state and i < len(st.session_state.detected_stage_ends):
+                end_t_base = int(st.session_state.detected_stage_ends[i])
+            else:
+                end_t_base = int(vorlauf + (i + 1) * stage_sec + i * pause_sec)
+            
+            end_t_key = f"lauftest_end_t_{i}"
+            if end_t_key not in st.session_state:
+                st.session_state[end_t_key] = end_t_base
+            
+            new_end_t = st.number_input(
+                f"Stufe {i+1} Endzeit (s)",
+                min_value=0,
+                max_value=10000,
+                value=int(st.session_state[end_t_key]),
+                step=1,
+                key=f"lauftest_end_t_widget_{i}"
+            )
+            st.session_state[end_t_key] = new_end_t
 
 if uploaded_file is not None and uploaded_file.name != st.session_state.last_uploaded_file:
     st.session_state.last_uploaded_file = uploaded_file.name
@@ -1518,8 +1747,46 @@ if uploaded_file is not None and uploaded_file.name != st.session_state.last_upl
                     t_val = f"{t_date_str[:2]}.{t_date_str[2:4]}.{t_date_str[4:]}"
                 except:
                     t_val = str(raw_test_date)
+
+        # Geschlecht
+        g_val = None
+        if df_excel.shape[0] > 3 and df_excel.shape[1] > 1:
+            raw_gender = df_excel.iloc[3, 1]
+            if pd.notna(raw_gender):
+                raw_gender_str = str(raw_gender).strip().lower()
+                if "w" in raw_gender_str or "fem" in raw_gender_str or "weib" in raw_gender_str:
+                    g_val = "weiblich"
+                else:
+                    g_val = "männlich"
                     
-        update_base_data(name_val, h_val, w_val, b_val, t_val)
+        update_base_data(name_val, h_val, w_val, b_val, t_val, g_val)
+        
+        # Parse and save spiro data to session state to prevent slow Excel reloading
+        try:
+            times_sec = df_excel.iloc[3:, 9].apply(parse_time_to_seconds)
+            vo2_col = pd.to_numeric(df_excel.iloc[3:, 13], errors='coerce')
+            vco2_col = pd.to_numeric(df_excel.iloc[3:, 14], errors='coerce')
+            spiro_df = pd.DataFrame({'Time': times_sec, 'VO2': vo2_col, 'VCO2': vco2_col}).dropna(subset=['Time'])
+            st.session_state.lauftest_spiro_df = spiro_df
+            
+            # Detect stage ends and store in session state
+            detected = detect_spiro_stage_ends(spiro_df, 20)
+            if detected:
+                st.session_state.detected_stage_ends = detected
+            else:
+                if "detected_stage_ends" in st.session_state:
+                    del st.session_state.detected_stage_ends
+        except Exception as detection_err:
+            pass
+
+        # Reset manual end times and offsets
+        for key in list(st.session_state.keys()):
+            if key.startswith("lauftest_end_t_") or key.startswith("lauftest_offset_"):
+                del st.session_state[key]
+
+        # Reset started flag
+        st.session_state.lauf_auswertung_gestartet = False
+
         st.rerun()
     except Exception as e:
         st.sidebar.error(f"Fehler beim Extrahieren der Stammdaten: {e}")
@@ -1567,6 +1834,12 @@ with st.sidebar.form("running_form", enter_to_submit=False):
         kategorie = st.selectbox("Kategorie", options=kategorie_options, index=kategorie_options.index(kategorie_val), key="kategorie_lauft_widget")
         st.session_state.kategorie = kategorie
 
+        # Geschlecht selectbox
+        gender_options = ["männlich", "weiblich"]
+        gender_val = st.session_state.get("gender", "männlich")
+        gender = st.selectbox("Geschlecht", options=gender_options, index=gender_options.index(gender_val), key="gender_lauft_widget")
+        st.session_state.gender = gender
+
         # Coach selectbox
         coach_options = ["Markus Hertlein", "Marius Trompetter", "Susanne Traser", "Manuel Kuhnle", "Billie Benkel", "Jean Surmont", "Hosea Frick", "Björn Geesmann", "Gregor Eichhorn"]
         coach_val = st.session_state.coach
@@ -1611,60 +1884,76 @@ with st.sidebar.form("running_form", enter_to_submit=False):
             key="lauftest_lac_editor_key"
         )
 
-# Testprotokoll & Step Parameters placed below the lactate table expander
-test_types = [
-    "HYCYS Standart (5min / +0,4m/s)",
-    "Neues Protokoll (3min / +1km/h bzw. 0,278m/s)"
-]
-test_type = st.sidebar.selectbox("Testprotokoll", options=test_types, key="test_type_lauft_widget")
+    # Step parameters and Protokoll-Setup have been moved outside the form to enable real-time table resizing.
 
-if test_type != st.session_state.last_test_type:
-    st.session_state.last_test_type = test_type
-    if test_type == "HYCYS Standart (5min / +0,4m/s)":
-        st.session_state.start_v = 2.8
-        st.session_state.v_increment = 0.400
-        st.session_state.anzahl = 5
-        st.session_state.stufendauer = 5.0
-    elif test_type == "Neues Protokoll (3min / +1km/h bzw. 0,278m/s)":
-        st.session_state.start_v = 2.22
-        st.session_state.v_increment = 0.278
-        st.session_state.anzahl = 8
-        st.session_state.stufendauer = 3.0
-    # Ruhemessung and Pausendauer always 60s and 30s
-    st.session_state.vorlauf = 60
-    st.session_state.pausendauer = 30
-    st.rerun()
-
-    # Step parameters (not collapsed)
-    start_v = st.number_input("Startgeschwindigkeit (m/s)", value=float(st.session_state.start_v), step=0.1, key="start_v_lauft_widget")
-    st.session_state.start_v = start_v
-
-    v_increment = st.number_input("Geschwindigkeitssteigerung (m/s)", value=float(st.session_state.v_increment), step=0.001, format="%.3f", key="v_increment_lauft_widget")
-    st.session_state.v_increment = v_increment
-
-    anzahl = st.number_input("Anzahl Stufen", value=int(st.session_state.anzahl), min_value=1, max_value=20, step=1, key="anzahl_lauft_widget")
-    st.session_state.anzahl = anzahl
-
-    # Collapsible Protokoll-Setup expander
-    with st.expander("Protokoll-Setup", expanded=False):
-        vorlauf = st.number_input("Ruhemessung (Sekunden)", value=int(st.session_state.vorlauf), step=10, key="vorlauf_lauft_widget")
-        st.session_state.vorlauf = vorlauf
+    with st.expander("Potential Overrides", expanded=False):
+        st.caption("Simuliere den Effekt von Anpassungen bei VO2max, VLamax oder ANS.")
+        pot_vo2_sel = st.selectbox(
+            "VO2max Potential",
+            ["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"],
+            index=["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"].index(st.session_state.get("pot_vo2_select_key_lauft", "Keine Änderung")),
+            key="pot_vo2_select_key_lauft"
+        )
+        pot_vla_sel = st.selectbox(
+            "VLamax Potential",
+            ["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"],
+            index=["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"].index(st.session_state.get("pot_vla_select_key_lauft", "Keine Änderung")),
+            key="pot_vla_select_key_lauft"
+        )
+        pot_ans_sel = st.selectbox(
+            "ANS Potential",
+            ["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"],
+            index=["Keine Änderung", "+2 %", "+5 %", "-2 %", "-5 %"].index(st.session_state.get("pot_ans_select_key_lauft", "Keine Änderung")),
+            key="pot_ans_select_key_lauft"
+        )
         
-        stufendauer = st.number_input("Stufendauer (Minuten)", value=float(st.session_state.stufendauer), step=0.5, key="stufendauer_lauft_widget")
-        st.session_state.stufendauer = stufendauer
-        
-        pausendauer = st.number_input("Pausendauer (Sekunden)", value=int(st.session_state.pausendauer), step=5, key="pausendauer_lauft_widget")
-        st.session_state.pausendauer = pausendauer
-        
-        ausbelastung = st.checkbox("Test bis zur Ausbelastung", value=True, key="ausbelastung_lauft_widget")
+        if st.session_state.get("lauf_auswertung_gestartet", False):
+            st.markdown(f"""
+            **Simuliertes Coaching-Potential:**
+            * **VO2max:** {st.session_state.get('pot_vo2max', 0.0):.1f} ml/min/kg
+            * **VLamax:** {st.session_state.get('pot_vlamax', 0.0):.3f} mmol/L/s
+            * **ANS:** {st.session_state.get('pot_ans_rel', 0.0):.2f} m/s ({round(st.session_state.get('pot_ans_rel', 0.0) * 3.6, 1)} km/h)
+            * **Fatmax:** {st.session_state.get('pot_fatmax', 0.0):.2f} m/s ({round(st.session_state.get('pot_fatmax', 0.0) * 3.6, 1)} km/h)
+            """)
 
     st.markdown("---")
     start_button = st.form_submit_button("Auswertung starten", type="primary")
     if start_button:
         st.session_state.df_lauftest_input = edited_df
         st.session_state.df_sf = edited_sf
+        st.session_state.lauf_auswertung_gestartet = True
 
 # --- HILFSFUNKTIONEN ---
+
+def detect_spiro_stage_ends(df_spiro, anzahl):
+    n_rows = len(df_spiro)
+    if n_rows < 10:
+        return []
+    t_diffs = df_spiro['Time'].diff().dropna()
+    dt = t_diffs.median() if len(t_diffs) > 0 else 10.0
+    step_30s = max(1, int(round(30.0 / dt)))
+    drops = []
+    for i in range(n_rows - step_30s):
+        t1 = df_spiro['Time'].iloc[i]
+        vo2_1 = df_spiro['VO2'].iloc[i]
+        vo2_2 = df_spiro['VO2'].iloc[i + step_30s]
+        t2 = df_spiro['Time'].iloc[i + step_30s]
+        if 20 <= (t2 - t1) <= 45:
+            pct_drop = (vo2_1 - vo2_2) / vo2_1 if vo2_1 > 0 else 0.0
+            drops.append((t1, pct_drop, vo2_1))
+    candidate_drops = [d for d in drops if d[1] > 0.15 and d[0] > 120]
+    candidate_drops.sort(key=lambda x: x[0])
+    grouped_ends = []
+    for d in candidate_drops:
+        t, pct, val = d
+        if not grouped_ends or t - grouped_ends[-1][0] > 90:
+            grouped_ends.append(d)
+        else:
+            if pct > grouped_ends[-1][1]:
+                grouped_ends[-1] = d
+    detected_times = [g[0] for g in grouped_ends]
+    detected_times.sort()
+    return [float(x) for x in detected_times[:anzahl]]
 
 def calculate_vlamax_for_v(v_thresh, rel_vo2max, speed_arr, vo2_steady_abs, vco2_steady_abs, weight):
     if not (rel_vo2max > 0 and v_thresh > 0 and len(vo2_steady_abs) > 0 and weight > 0): 
@@ -1680,7 +1969,6 @@ def calculate_vlamax_for_v(v_thresh, rel_vo2max, speed_arr, vo2_steady_abs, vco2
         vo2_working = max(0.0, vo2 - vo2_rest)
         if vo2 > 0 and vco2 > 0:
             rq = vco2 / vo2
-            rq = max(0.7, min(1.0, rq))
         else:
             rq = 0.85
         cal_eq = (rq - 0.7) * 5.094 + 19.6
@@ -1691,7 +1979,10 @@ def calculate_vlamax_for_v(v_thresh, rel_vo2max, speed_arr, vo2_steady_abs, vco2
     if len(re_abs_m_s) == 0 or len(ex_speeds) == 0:
         return None, None, None
         
-    re_abs_at_thresh = np.interp(v_thresh, ex_speeds, re_abs_m_s)
+    # Discretize speed to 0.01 step using floor (with floating-point tolerance)
+    # to match Excel's approximate match behavior in J25:K425 table
+    v_discretized = np.floor(v_thresh * 100 + 1e-9) / 100
+    re_abs_at_thresh = np.interp(v_discretized, ex_speeds, re_abs_m_s)
     
     # Calculate relative VO2 demand at threshold (adding B28 = 1.0)
     rel_vo2_demand = (v_thresh * re_abs_at_thresh / weight) + 1.0
@@ -1732,7 +2023,6 @@ def calculate_laufokonomie_hycys(vo2_abs, vco2_abs, weight, speed_ms):
     # RQ (Spalte K = VCO2 / VO2)
     if vco2_abs > 0 and vo2_abs > 0:
         rq = vco2_abs / vo2_abs
-        rq = max(0.7, min(1.0, rq))  # physiologischer Bereich
     else:
         rq = 0.85  # Standardwert
     # Kalorisches Äquivalent bei gemessenem RQ [kcal/L O2] (L12-Formel)
@@ -1749,7 +2039,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
                coach, sportart, kategorie, height, speed, lactate, hr, vo2_steady_values, vo2_steady_abs, vco2_steady_abs, uploaded_file):
     pdf = FPDF(unit='pt')
     pdf.set_auto_page_break(auto=False)
-    
+
     # Standard colors from the template
     c_teal = (44, 183, 185)       # #2cb7b9
     c_gold = (205, 182, 99)       # #cdb663
@@ -1778,7 +2068,216 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         style = 'F' if fill_color and not stroke_color else 'D' if stroke_color and not fill_color else 'FD' if fill_color and stroke_color else ''
         pdf.rect(x, y, w, h, style)
 
+    def page_logo(pg_num):
+        """Draw small logo top-right (pages 2-5)."""
+        asset = f'pdf_assets/page{pg_num}_img1.png'
+        if not os.path.exists(asset):
+            asset = 'pdf_assets/page2_img1.png'
+        if os.path.exists(asset):
+            coords = {
+                2: (396.23, 68.88, 109.29, 20.47),
+                3: (399.91, 69.42, 108.63, 20.09),
+                4: (408.48, 68.88, 109.23, 20.58),
+                5: (399.14, 68.88, 108.80, 20.58)
+            }
+            x, y, w, h = coords.get(pg_num, (396.23, 68.88, 109.29, 20.47))
+            pdf.image(asset, x=x, y=y, w=w, h=h)
+
+    def format_pace_helper(v):
+        if not isinstance(v, (int, float)) or v <= 0:
+            return "-"
+        sec = 1000.0 / v
+        m = int(sec // 60)
+        s = int(round(sec % 60))
+        if s == 60:
+            m += 1
+            s = 0
+        return f"{m:02d}:{s:02d} min/km"
+
+    def format_time_helper(t_min):
+        h = int(t_min // 60)
+        m = int(t_min % 60)
+        s = int(round((t_min * 60) % 60))
+        if s == 60:
+            m += 1
+            s = 0
+        if m == 60:
+            h += 1
+            m = 0
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
     temp_files = []
+
+    # --- METABOLIC GRID CALCULATIONS FOR REPORT ---
+    vla_val = 0.6
+    ans_row = pd.DataFrame()
+    try:
+        if not df_res.empty:
+            ans_row = df_res.iloc[[0]]
+            vla_raw = ans_row.iloc[0].get('VLamax [mmol/l/s]', 0.6)
+            if pd.notna(vla_raw) and vla_raw != 'N/A' and 'bitte' not in str(vla_raw).lower():
+                vla_val = float(vla_raw)
+    except:
+        pass
+
+    v_ans = 3.5
+    if not ans_row.empty:
+        try:
+            v_ans = float(ans_row.iloc[0].get('v', 3.5))
+        except:
+            pass
+
+    has_spiro = (uploaded_file is not None) and (len(vo2_steady_abs) > 0)
+    
+    # Defaults/Fallbacks
+    fatmax_speed = None
+    fatmax_pace_str = "-"
+    fatmax_total_energy = "-"
+    fatmax_fat_energy = "-"
+    ans_total_energy = "-"
+    ans_carb_consumption = "-"
+    marathon_paces = {0: "-", 5: "-", 10: "-", 15: "-"}
+    marathon_times = {0: "-", 5: "-", 10: "-", 15: "-"}
+    marathon_deltas = {5: "-", 10: "-", 15: "-"}
+
+    if has_spiro:
+        try:
+            glycogen_store = 250.0  # g
+            carb_intake_rate = 45.0  # g/h
+            vo2_rest = 3.5 * weight
+
+            # 1. Compute AC for each stage
+            ac_stages = []
+            for v, vo2, vco2 in zip(speed, vo2_steady_abs, vco2_steady_abs):
+                if v <= 0 or vo2 <= 0:
+                    ac_stages.append(0.0)
+                    continue
+                net_vo2 = max(0.0, vo2 - vo2_rest)
+                rq = vco2 / vo2 if vco2 > 0 else 0.85
+                kal_equiv = (rq - 0.7) * 5.094 + 19.6
+                ee_kJ_min = (net_vo2 / 1000.0) * kal_equiv
+                vo2_100kh = ee_kJ_min / 21.1 * 1000.0
+                ac = vo2_100kh / (v * 100.0)
+                ac_stages.append(ac)
+
+            ex_speeds = [v for v in speed if v > 0]
+            
+            if len(ex_speeds) >= 2:
+                v_grid = np.arange(2.6, 8.61, 0.01)
+                ac_grid = []
+                for v in v_grid:
+                    if v <= ex_speeds[0]:
+                        m = (ac_stages[1] - ac_stages[0]) / (ex_speeds[1] - ex_speeds[0])
+                        c_val = ac_stages[0] - m * ex_speeds[0]
+                        ac = m * v + c_val
+                    elif v >= ex_speeds[-1]:
+                        m = (ac_stages[-1] - ac_stages[-2]) / (ex_speeds[-1] - ex_speeds[-2])
+                        c_val = ac_stages[-1] - m * ex_speeds[-1]
+                        ac = m * v + c_val
+                    else:
+                        for i in range(len(ex_speeds) - 1):
+                            if ex_speeds[i] <= v < ex_speeds[i+1]:
+                                m = (ac_stages[i+1] - ac_stages[i]) / (ex_speeds[i+1] - ex_speeds[i])
+                                c_val = ac_stages[i] - m * ex_speeds[i]
+                                ac = m * v + c_val
+                                break
+                    ac_grid.append(ac)
+
+                ac_grid = np.array(ac_grid)
+                vo2_rel_demand_grid = (ac_grid * v_grid * 100.0) / weight + 1.0
+                delta_vo2_grid = rel_vo2max - vo2_rel_demand_grid
+
+                lac_prod_grid = np.zeros_like(v_grid)
+                lac_clear_grid = (0.02049 * vo2_rel_demand_grid) / 0.4
+                fat_pct_grid = np.zeros_like(v_grid)
+                carb_pct_grid = np.zeros_like(v_grid)
+                net_clearance = np.full_like(v_grid, -9999.0)
+
+                ks1, ks2, la_eq, vol_dist = 0.0631, 1.331, 0.02049, 0.4
+
+                for idx, (v, vo2_rel, d_vo2) in enumerate(zip(v_grid, vo2_rel_demand_grid, delta_vo2_grid)):
+                    if d_vo2 > 0 and vo2_rel > 0:
+                        adp = np.sqrt((ks1 * vo2_rel) / d_vo2)
+                        adp_3 = adp ** 3
+                        pfk = 1 + (ks2 / adp_3)
+                        vla_min = vla_val * 60 / pfk  # mmol/l/min
+                        lac_prod_grid[idx] = vla_min
+                        
+                        fat_pct = 100.0 - (vla_min / lac_clear_grid[idx] * 100.0)
+                        fat_pct = max(0.0, min(100.0, fat_pct))
+                        net_clearance[idx] = lac_clear_grid[idx] - vla_min
+                    else:
+                        fat_pct = 0.0
+                        net_clearance[idx] = -9999.0
+                    
+                    fat_pct_grid[idx] = fat_pct
+                    carb_pct_grid[idx] = 100.0 - fat_pct
+
+                max_clearance_idx = np.argmax(net_clearance)
+                fatmax_speed = v_grid[max_clearance_idx]
+                fatmax_pace_str = format_pace_helper(fatmax_speed)
+
+                rq_grid = 0.7 + 0.3 * (carb_pct_grid / 100.0)
+                kal_equiv_grid = (rq_grid - 0.7) * 5.094 + 19.6
+                ee_kJ_min_grid = (vo2_rel_demand_grid * weight / 1000.0) * kal_equiv_grid
+                ee_kJ_h_grid = ee_kJ_min_grid * 60
+                ee_kcal_h_grid = ee_kJ_h_grid / 4.186
+                ee_fat_kcal_h_grid = ee_kcal_h_grid * (fat_pct_grid / 100.0)
+                ee_kh_kcal_h_grid = ee_kcal_h_grid * (carb_pct_grid / 100.0)
+                carb_g_h_grid = ee_kh_kcal_h_grid / 4.063
+
+                fatmax_idx = max_clearance_idx
+                fatmax_total_energy = f"{ee_kcal_h_grid[fatmax_idx]:.1f}".replace('.', ',')
+                fatmax_fat_energy = f"{ee_fat_kcal_h_grid[fatmax_idx]:.1f}".replace('.', ',')
+
+                ans_speed_lookup = np.floor(v_ans * 100 + 1e-9) / 100.0
+                ans_idx = np.argmin(np.abs(v_grid - ans_speed_lookup))
+                ans_total_energy = f"{ee_kcal_h_grid[ans_idx]:.1f}".replace('.', ',')
+                ans_carb_consumption = f"{carb_g_h_grid[ans_idx]:.1f}".replace('.', ',')
+
+                def calc_marathon_speed_0():
+                    for idx, v in enumerate(v_grid):
+                        t_mara_min = 42195.0 / (v * 60.0)
+                        carb_req = ee_kh_kcal_h_grid[idx] / 60.0 * t_mara_min
+                        carb_avail = (carb_intake_rate / 60.0 * t_mara_min * 4.063) + (glycogen_store * 4.063)
+                        deficit = carb_req - carb_avail
+                        if deficit > 0:
+                            return v_grid[idx - 1]
+                    return v_grid[-1]
+
+                v_mara_0 = calc_marathon_speed_0()
+                v_mara_5 = v_mara_0 / 0.95
+                v_mara_10 = v_mara_0 / 0.90
+                v_mara_15 = v_mara_0 / 0.85
+
+                for name, v_m in [("0%", v_mara_0), ("5%", v_mara_5), ("10%", v_mara_10), ("15%", v_mara_15)]:
+                    t_min = 42195.0 / (v_m * 60.0)
+                    h = int(t_min // 60)
+                    m = int(t_min % 60)
+                    s = int(round((t_min * 60) % 60))
+                    if s == 60:
+                        m += 1
+                        s = 0
+                    if m == 60:
+                        h += 1
+                        m = 0
+                    
+                    pct_key = int(name.replace('%', ''))
+                    marathon_paces[pct_key] = format_pace_helper(v_m)
+                    marathon_times[pct_key] = f"{h:02d}:{m:02d}:{s:02d}"
+
+                t_min_0 = 42195.0 / (v_mara_0 * 60.0)
+                for pct_key in [5, 10, 15]:
+                    t_min_p = 42195.0 / ((v_mara_0 / (1.0 - pct_key / 100.0)) * 60.0)
+                    delta_min = t_min_0 - t_min_p
+                    dm = int(delta_min)
+                    ds = int(round((delta_min - dm) * 60.0))
+                    if ds == 60:
+                        dm += 1
+                        ds = 0
+                    marathon_deltas[pct_key] = f"-{dm:02d}:{ds:02d} min"
+        except Exception as e:
+            pass
 
     # --- SEITE 1: DECKBLATT ---
     pdf.add_page()
@@ -1809,8 +2308,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     pdf.add_page()
     draw_rect(50.9, 54.5, 471.6, 663.6, fill_color=c_white)
     
-    if os.path.exists('pdf_assets/page2_img1.png'):
-        pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
+    page_logo(2)
 
     draw_rect(57.6, 133.9, 171.9, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 171.9 / 2.0, 135.0, "Anthropologie", size=8.2, font_style='B', color=c_white)
@@ -1824,7 +2322,6 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_text(59.3, 209.7, "Body Mass Index", size=8.3, font_style='B', color=c_black)
     draw_text(187.5, 209.7, f"{bmi:.1f} kg/m²".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
     
-    # Merged gold box for Masse & %
     draw_rect(113.18, 245.58, 112.94, 10.44, fill_color=c_gold)
     draw_text_centered(141.42, 246.8, "Masse", size=8.2, font_style='B', color=c_white)
     draw_text_centered(197.89, 246.8, "%",     size=8.2, font_style='B', color=c_white)
@@ -1839,25 +2336,35 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_text_centered(141.42, 270.1, f"{fettfrei_kg:.1f} kg".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
     draw_text_centered(197.89, 270.1, f"{100.0 - body_fat_pct:.1f} %".replace('.', ','), size=8.3, font_style='B', color=c_dark_grey)
 
-    # Donut Pie Chart (Fett / Fettfrei)
+    # Exploded Pie Chart matching Cycling Report
     fig, ax = plt.subplots(figsize=(3.856, 2.0), dpi=300)
     pct_fett = max(0.1, body_fat_pct)
     pct_frei = max(0.1, 100.0 - body_fat_pct)
     wedges, texts, autotexts = ax.pie(
         [pct_fett, pct_frei],
-        colors=['#cdb663', '#2cb7b9'],
+        explode=(0.12, 0),
+        colors=['#2cb7b9', '#cdb663'],
         autopct=lambda p: f"{p:.1f} %".replace('.', ','),
         startangle=90,
-        pctdistance=0.60,
-        textprops=dict(size=7, weight='bold', color='white'),
-        wedgeprops=dict(width=0.35, edgecolor='white', linewidth=2),
+        counterclock=False,
+        pctdistance=0.50,
+        textprops=dict(size=8, weight='bold', color='white'),
+        wedgeprops=dict(edgecolor='white', linewidth=2),
     )
-    for at in autotexts:
-        at.set_color('white')
+    
+    for i, (wedge, autotext) in enumerate(zip(wedges, autotexts)):
+        theta = np.deg2rad(wedge.theta1 + (wedge.theta2 - wedge.theta1) / 2.0)
+        e = 0.12 if i == 0 else 0.0
+        d = 0.65 if i == 0 else 0.50
+        x = (e + d) * np.cos(theta)
+        y = (e + d) * np.sin(theta)
+        autotext.set_position((x, y))
+        autotext.set_color('white')
+
     ax.axis('equal')
-    # Manual legend matching reference
-    handles = [Patch(color='#cdb663', label='Fett'), Patch(color='#2cb7b9', label='Fettfrei')]
-    legend = ax.legend(handles=handles, loc='center left', bbox_to_anchor=(1.05, 0.5), fontsize=7, frameon=False)
+    from matplotlib.patches import Patch
+    handles = [Patch(color='#2cb7b9', label='Fett'), Patch(color='#cdb663', label='Fettfrei')]
+    legend = ax.legend(handles=handles, loc='center left', bbox_to_anchor=(1.05, 0.5), fontsize=8, frameon=False)
     for text in legend.get_texts():
         text.set_weight('bold')
         text.set_color('#595a59')
@@ -1876,17 +2383,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_rect(114.02, 314.9, 112.94, 10.44, fill_color=c_gold)
     draw_text_centered(114.02 + 112.94 / 2.0, 316.1, "VLamax", size=8.2, font_style='B', color=c_white)
     
-    vla_ans_str = "-"
-    ans_row = df_res[df_res['Modell'].str.contains('OBLA 4.0', na=False)]
-    if ans_row.empty and not df_res.empty:
-        ans_row = df_res.iloc[0:1]
-    if not ans_row.empty:
-        vla_val = ans_row.iloc[0].get('VLamax [mmol/l/s]', '-')
-        if pd.notna(vla_val) and vla_val != 'N/A' and 'bitte' not in str(vla_val).lower():
-            try:
-                vla_ans_str = f"{float(vla_val):.2f} mmol/l/s".replace('.', ',')
-            except:
-                vla_ans_str = str(vla_val)
+    vla_ans_str = f"{vla_val:.2f} mmol/l/s".replace('.', ',') if vla_val > 0 else "-"
     draw_text_centered(114.02 + 112.94 / 2.0, 314.9 + 10.44 + 0.8, vla_ans_str, size=8.2, font_style='B', color=c_dark_grey)
 
     # VO2max Section
@@ -1976,8 +2473,8 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     # --- SEITE 3: LAUFÖKONOMIE ---
     pdf.add_page()
     draw_rect(50.9, 54.5, 479.1, 663.6, fill_color=c_white)
-    if os.path.exists('pdf_assets/page2_img1.png'):
-        pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
+    
+    page_logo(3)
         
     draw_rect(57.6, 133.9, 207.0, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 207.0 / 2.0, 135.0, "Laufökonomie", size=8.2, font_style='B', color=c_white)
@@ -2040,7 +2537,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         pdf.image(tmp_eco_chart.name, x=266.8, y=156.2, w=257, h=135.6)
         temp_files.append(tmp_eco_chart.name)
 
-    # Marathon predictions
+    # Marathon predictions table populating calculated values
     draw_rect(57.6, 334.1, 414.0, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 414.0 / 2.0, 335.2, "Einfluss Laufökonomie auf Marathon-Zeit", size=8.2, font_style='B', color=c_white)
 
@@ -2053,25 +2550,63 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     y_coords_s3_m = [386.0, 398.9, 412.3]
     improves = ["0%", "5%", "10%"]
     for imp, y_coord in zip(improves, y_coords_s3_m):
+        pct_key = int(imp.replace('%', ''))
+        pace_val = marathon_paces[pct_key]
+        time_val = marathon_times[pct_key]
+        delta_val = marathon_deltas[pct_key] if pct_key != 0 else "-"
+        
         draw_text_centered(109.35, y_coord, imp, size=9.0, font_style='B', color=c_dark_grey)
-        draw_text_centered(212.85, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
-        draw_text_centered(316.35, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
-        if imp != "0%":
-            draw_text_centered(419.85, y_coord, "-", size=9.0, font_style='B', color=c_dark_grey)
+        draw_text_centered(212.85, y_coord, pace_val, size=9.0, font_style='B', color=c_dark_grey)
+        draw_text_centered(316.35, y_coord, time_val, size=9.0, font_style='B', color=c_dark_grey)
+        if pct_key != 0:
+            draw_text_centered(419.85, y_coord, delta_val, size=9.0, font_style='B', color=c_dark_grey)
 
-    # Empty Marathon prediction chart
+    # Marathon prediction chart with line
     fig, ax = plt.subplots(figsize=(5, 2.5), dpi=300)
+    
+    if has_spiro and fatmax_speed is not None:
+        y_vals = [0, 5, 10, 15]
+        t_0_h = 42195.0 / (v_mara_0 * 3600.0)
+        t_5_h = 42195.0 / (v_mara_5 * 3600.0)
+        t_10_h = 42195.0 / (v_mara_10 * 3600.0)
+        t_15_h = 42195.0 / (v_mara_15 * 3600.0)
+        x_vals = [t_0_h, t_5_h, t_10_h, t_15_h]
+        
+        ax.plot(x_vals, y_vals, marker='o', color='#2cb7b9', linewidth=2.5, markersize=4)
+        
+        ax.set_ylim(-1, 16)
+        ax.set_yticks([0, 5, 10, 15])
+        ax.set_yticklabels(['0%', '5%', '10%', '15%'])
+        
+        x_min = min(x_vals) - 0.1
+        x_max = max(x_vals) + 0.1
+        ax.set_xlim(x_min, x_max)
+        
+        import matplotlib.ticker as ticker
+        def format_hours(x, pos):
+            h = int(x)
+            m = int(round((x - h) * 60))
+            if m == 60:
+                h += 1
+                m = 0
+            return f"{h}:{m:02d}"
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_hours))
+        
+        for label in ax.get_xticklabels(): label.set_weight('bold'); label.set_size(5)
+        for label in ax.get_yticklabels(): label.set_weight('bold'); label.set_size(5)
+    else:
+        ax.set_xlim(2.0, 3.5)
+        ax.set_ylim(0, 15)
+        ax.set_yticks([0, 5, 10, 15])
+        ax.set_yticklabels(['0%', '5%', '10%', '15%'])
+        for label in ax.get_xticklabels(): label.set_weight('bold'); label.set_size(5)
+        for label in ax.get_yticklabels(): label.set_weight('bold'); label.set_size(5)
+
     ax.set_xlabel('Marathon-Zielzeit [h:mm]', color='#595a59', fontsize=6, fontweight='bold')
     ax.set_ylabel('Verbesserung Laufökonomie [%]', color='#595a59', fontsize=6, fontweight='bold')
-    ax.set_xlim(120, 200)
-    ax.set_xticks([120, 130, 140, 150, 160, 170, 180, 190, 200])
-    ax.set_xticklabels(['2:00', '2:10', '2:20', '2:30', '2:40', '2:50', '3:00', '3:10', '3:20'])
-    ax.set_ylim(0, 3.5)
-    ax.set_yticks([0, 1, 2, 3])
-    ax.set_yticklabels(['0%', '1%', '2%', '3%'])
-    ax.tick_params(axis='both', labelcolor='#595a59', labelsize=5, width=1.2)
+    ax.tick_params(axis='both', labelcolor='#595a59', width=1.2)
     for s in ax.spines.values(): s.set_color('#595a59'); s.set_linewidth(1.2)
-    ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+    ax.grid(True, which='both', linestyle='-', linewidth=0.5, color='#d8d8d8')
     ax.set_axisbelow(True)
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_mara_chart:
@@ -2083,8 +2618,8 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     # --- SEITE 4: ANAEROBE SCHWELLE & ENERGETIK ---
     pdf.add_page()
     draw_rect(50.9, 54.5, 479.1, 663.6, fill_color=c_white)
-    if os.path.exists('pdf_assets/page2_img1.png'):
-        pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
+    
+    page_logo(4)
         
     draw_rect(57.6, 133.9, 465.7, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 465.7 / 2.0, 135.0, "Anaerobe Schwelle (ANS) - Geschwindigkeit & Herzfrequenz", size=8.2, font_style='B', color=c_white)
@@ -2097,14 +2632,21 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_text_centered(368.0 + 103.6 / 2.0, 160.3, "Herzfrequenz", size=8.2, font_style='B', color=c_white)
 
     ans_ms_str, ans_pace_str, ans_hf_str = "-", "-", "-"
-    v_ans = 0.0
+    v_ans_val = 0.0
     if not ans_row.empty:
-        v_ans = ans_row.iloc[0].get('v', 0.0)
-        if isinstance(v_ans, (int, float)):
-            ans_ms_str = f"{v_ans:.2f} m/s".replace('.', ',')
-            pace_sec = 1000.0 / v_ans if v_ans > 0 else 0
-            ans_pace_str = f"{int(pace_sec // 60):02d}:{int(pace_sec % 60):02d} min/km"
-            ans_hf_str = f"{int(ans_row.iloc[0].get('HF', 0))} bpm"
+        raw_v = ans_row.iloc[0].get('v', 0.0)
+        try:
+            v_ans_val = float(raw_v)
+        except (ValueError, TypeError):
+            v_ans_val = 0.0
+        if v_ans_val > 0:
+            ans_ms_str = f"{v_ans_val:.2f} m/s".replace('.', ',')
+            ans_pace_str = format_pace_helper(v_ans_val)
+            try:
+                raw_hf = ans_row.iloc[0].get('HF', 0)
+                ans_hf_str = f"{int(float(raw_hf))} bpm"
+            except (ValueError, TypeError):
+                ans_hf_str = "-"
 
     draw_text_centered(109.35, 170.34, ans_ms_str, size=8.3, font_style='B', color=c_dark_grey)
     draw_text_centered(212.85, 170.34, ans_pace_str, size=8.3, font_style='B', color=c_dark_grey)
@@ -2124,8 +2666,8 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_text_centered(368.0 + 103.6 / 2.0, 236.1, "% VO2max", size=8.2, font_style='B', color=c_white)
  
     ans_vo2_abs_str, ans_vo2_rel_str, ans_vo2_pct_str = "-", "-", "-"
-    if uploaded_file is not None and v_ans > 0 and len(vo2_steady_values) > 0:
-        ans_vo2_rel = np.interp(v_ans, speed, vo2_steady_values)
+    if uploaded_file is not None and v_ans_val > 0 and len(vo2_steady_values) > 0:
+        ans_vo2_rel = np.interp(v_ans_val, speed, vo2_steady_values)
         ans_vo2_abs = ans_vo2_rel * weight
         ans_vo2_pct = (ans_vo2_rel / rel_vo2max * 100.0) if rel_vo2max > 0 else 0.0
         
@@ -2137,7 +2679,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_text_centered(212.8 + 103.6 / 2.0, 246.14, ans_vo2_rel_str, size=8.3, font_style='B', color=c_dark_grey)
     draw_text_centered(368.0 + 103.6 / 2.0, 246.14, ans_vo2_pct_str, size=8.3, font_style='B', color=c_dark_grey)
  
-    # Energetik Box
+    # Energetik Box with calculated total energy & KH-Verbrauch
     draw_rect(57.6, 279.9, 465.7, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 465.7 / 2.0, 281.0, "Anaerobe Schwelle (ANS) - Energetik", size=8.2, font_style='B', color=c_white)
  
@@ -2147,10 +2689,12 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_rect(212.8, 307.8, 103.6, 10.44, fill_color=c_gold)
     draw_text_centered(212.8 + 103.6 / 2.0, 309.0, "KH-Verbrauch", size=8.2, font_style='B', color=c_white)
  
-    draw_text_centered(57.6 + 103.6 / 2.0, 319.04, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text_centered(212.8 + 103.6 / 2.0, 319.04, "-", size=8.3, font_style='B', color=c_dark_grey)
+    ans_total_energy_str = f"{ans_total_energy} kcal/h" if ans_total_energy != "-" else "-"
+    ans_carb_consumption_str = f"{ans_carb_consumption} g/h" if ans_carb_consumption != "-" else "-"
+    draw_text_centered(57.6 + 103.6 / 2.0, 319.04, ans_total_energy_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(212.8 + 103.6 / 2.0, 319.04, ans_carb_consumption_str, size=8.3, font_style='B', color=c_dark_grey)
  
-    # Fatmax Box
+    # Fatmax Box with calculated values
     draw_rect(57.6, 355.1, 465.7, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 465.7 / 2.0, 356.2, "Fettstoffwechsel - Fatmax", size=8.2, font_style='B', color=c_white)
  
@@ -2161,25 +2705,47 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     draw_text_centered(316.3 + 207.0 / 4.0, 384.3, "Energie", size=8.2, font_style='B', color=c_white)
     draw_text_centered(316.3 + 3 * 207.0 / 4.0, 384.3, "Energie Fett", size=8.2, font_style='B', color=c_white)
  
-    draw_text_centered(109.35, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text_centered(212.85, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text_centered(316.3 + 207.0 / 4.0, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
-    draw_text_centered(316.3 + 3 * 207.0 / 4.0, 394.34, "-", size=8.3, font_style='B', color=c_dark_grey)
+    fatmax_speed_str = f"{fatmax_speed:.2f} m/s".replace('.', ',') if fatmax_speed is not None else "-"
+    fatmax_total_energy_str = f"{fatmax_total_energy} kcal/h" if fatmax_total_energy != "-" else "-"
+    fatmax_fat_energy_str = f"{fatmax_fat_energy} kcal/h" if fatmax_fat_energy != "-" else "-"
+    
+    draw_text_centered(109.35, 394.34, fatmax_speed_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(212.85, 394.34, fatmax_pace_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(316.3 + 207.0 / 4.0, 394.34, fatmax_total_energy_str, size=8.3, font_style='B', color=c_dark_grey)
+    draw_text_centered(316.3 + 3 * 207.0 / 4.0, 394.34, fatmax_fat_energy_str, size=8.3, font_style='B', color=c_dark_grey)
 
-    # Empty Energetik chart
+    # Energetik chart with dual-Y axis and plotted curves
     fig, ax = plt.subplots(figsize=(6, 3.2), dpi=300)
     ax.set_xlabel('Geschwindigkeit [m/s]', color='#595a59', fontsize=6, fontweight='bold')
     ax.set_ylabel('Energie [kcal/h]', color='#595a59', fontsize=6, fontweight='bold')
     ax.set_xlim(speed[0]*0.95, speed[-1]*1.05)
-    ax.set_ylim(0, 1500)
+    
     ax2 = ax.twinx()
     ax2.set_ylabel('Kohlenhydratverbrauch [g/h]', color='#595a59', fontsize=6, fontweight='bold')
-    ax2.set_ylim(0, 400)
+    
+    if has_spiro and fatmax_speed is not None:
+        ax.plot(v_grid, ee_kcal_h_grid, color='#595a59', linewidth=2.5, label='Energie gesamt')
+        ax.plot(v_grid, ee_fat_kcal_h_grid, color='#2cb7b9', linewidth=2.5, label='Energie Fett')
+        ax2.plot(v_grid, carb_g_h_grid, color='#cdb663', linewidth=2.5, label='Kohlenhydratverbrauch', linestyle='--')
+        
+        ax.set_ylim(0, max(ee_kcal_h_grid)*1.1)
+        ax2.set_ylim(0, max(carb_g_h_grid)*1.1)
+        
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        legend = ax.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=5, frameon=True, framealpha=0.9)
+        for text in legend.get_texts():
+            text.set_color('#595a59')
+            text.set_weight('bold')
+    else:
+        ax.set_ylim(0, 1500)
+        ax2.set_ylim(0, 400)
+        
     ax.tick_params(axis='both', labelcolor='#595a59', labelsize=5, width=1.2)
     ax2.tick_params(axis='both', labelcolor='#595a59', labelsize=5, width=1.2)
     for s in ax.spines.values(): s.set_color('#595a59'); s.set_linewidth(1.2)
     for s in ax2.spines.values(): s.set_color('#595a59'); s.set_linewidth(1.2)
-    ax.grid(True, which='both', linestyle='-', linewidth=1.0, color='#d8d8d8')
+    ax.grid(True, which='both', linestyle='-', linewidth=0.5, color='#d8d8d8')
     ax.set_axisbelow(True)
     plt.tight_layout()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_ener_chart:
@@ -2191,8 +2757,8 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     # --- SEITE 5: TRAININGSBEREICHE & REFERENZDATEN ---
     pdf.add_page()
     draw_rect(50.9, 54.5, 479.1, 663.6, fill_color=c_white)
-    if os.path.exists('pdf_assets/page2_img1.png'):
-        pdf.image('pdf_assets/page2_img1.png', x=355.0, y=54.0, w=167, h=55)
+    
+    page_logo(5)
         
     draw_rect(57.6, 133.9, 155.3, 10.44, fill_color=c_teal)
     draw_text_centered(57.6 + 155.3 / 2.0, 135.0, "Referenzdaten", size=8.2, font_style='B', color=c_white)
@@ -2262,25 +2828,6 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     pot_match = float(st.session_state.get("pot_match", 3.6))
     pot_vlamax = float(st.session_state.get("pot_vlamax", 0.45))
 
-    vla_val = 0.6
-    try:
-        ans_row = df_res[df_res['Modell'].str.contains('OBLA 4.0', na=False)]
-        if not ans_row.empty:
-            vla_raw = ans_row.iloc[0].get('VLamax [mmol/l/s]', 0.6)
-            if pd.notna(vla_raw) and vla_raw != 'N/A' and 'bitte' not in str(vla_raw).lower():
-                vla_val = float(vla_raw)
-    except:
-        pass
-
-    v_ans = 3.5
-    ans_hf = 160.0
-    if not ans_row.empty:
-        try:
-            v_ans = float(ans_row.iloc[0].get('v', 3.5))
-            ans_hf = float(ans_row.iloc[0].get('HF', 160.0))
-        except:
-            pass
-
     re_val = 210.0
     valid_re = []
     for i in range(len(speed)):
@@ -2309,10 +2856,18 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     pot_v_fatmax = pot_fatmax if pot_fatmax < 10 else v_fatmax * 1.15
     pot_v_match = pot_match if pot_match < 10 else v_kh_match * 1.15
 
+    ans_change_str = st.session_state.get("pot_ans_select_key_lauft", "Keine Änderung")
+    ans_change = 0.0
+    if "+2" in ans_change_str: ans_change = 0.02
+    elif "+5" in ans_change_str: ans_change = 0.05
+    elif "-2" in ans_change_str: ans_change = -0.02
+    elif "-5" in ans_change_str: ans_change = -0.05
+    pot_re_val = re_val / (1.0 + ans_change)
+
     potential_scores = [
         normalize_ref_running(pot_vo2max,  'VO2max'),
         normalize_ref_running(pot_fat,     'Fettanteil'),
-        normalize_ref_running(re_val * 0.95, 'Laufökonomie'),  # 5% improvement
+        normalize_ref_running(pot_re_val,  'Laufökonomie'),
         normalize_ref_running(pot_v_ans,   'ANS'),
         normalize_ref_running(pot_v_fatmax, 'Fatmax'),
         normalize_ref_running(pot_v_match, 'KH-Match'),
@@ -2368,6 +2923,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     ax.set_xlim(-140, 140)
     ax.set_ylim(-140, 140)
     
+    from matplotlib.lines import Line2D
     legend_handles = [
         Patch(facecolor='#cdb663', alpha=1.0,  label='Sehr gut'),
         Patch(facecolor='#2cb7b9', alpha=1.0,  label='Gut'),
@@ -2388,7 +2944,6 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         fig.savefig(tmp_radar.name, format="png", bbox_inches="tight", facecolor='white')
         plt.close(fig)
         
-        # Pad image to square to prevent stretching in FPDF
         img = Image.open(tmp_radar.name)
         w_img, h_img = img.size
         max_dim = max(w_img, h_img)
@@ -2396,7 +2951,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         new_img.paste(img, ((max_dim - w_img) // 2, (max_dim - h_img) // 2))
         new_img.save(tmp_radar.name)
         
-        pdf.image(tmp_radar.name, x=160.76, y=143.52, w=250.0, h=250.0)
+        pdf.image(tmp_radar.name, x=160.1, y=131.0, w=275.0, h=275.0)
         temp_files.append(tmp_radar.name)
 
     # Trainingsbereiche Table
@@ -2431,6 +2986,13 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         if not isinstance(hr_val, (int, float)) or hr_val <= 0:
             return "-"
         return str(int(round(hr_val)))
+
+    ans_hf = 160.0
+    if not ans_row.empty:
+        try:
+            ans_hf = float(ans_row.iloc[0].get('HF', 160.0))
+        except:
+            pass
 
     if v_ans > 0 and ans_hf > 0:
         zones_data = [
@@ -2472,39 +3034,28 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     for (zn, p_min, p_max, p_zl, hr_mn, hr_mx, hr_zl), y_coord in zip(zones_data, y_coords_s5):
         draw_text(59.3, y_coord, zn, size=8.3, font_style='B', color=c_dark_grey)
         
-        # Speed min
         if p_min == "-":
             draw_text_centered(231.8 + 6.0, y_coord, "-", size=8.3, color=c_dark_grey)
         else:
             draw_text(231.8, y_coord, p_min, size=8.3, color=c_dark_grey)
             
-        # Speed max
         draw_text(282.6, y_coord, p_max, size=8.3, color=c_dark_grey)
-        
-        # Speed Ziel
         draw_text(335.5, y_coord, p_zl, size=8.3, color=c_dark_grey)
         
-        # HF min
         if hr_mn == "-":
             draw_text_centered(387.0 + 6.0, y_coord, "-", size=8.3, color=c_dark_grey)
         else:
             draw_text(387.0, y_coord, hr_mn, size=8.3, color=c_dark_grey)
             
-        # HF max
         draw_text(437.9, y_coord, hr_mx, size=8.3, color=c_dark_grey)
-        
-        # HF Ziel
         draw_text(490.7, y_coord, hr_zl, size=8.3, color=c_dark_grey)
 
-    # Draw vertical separator lines
     for x in [212.9, 368.8, 524.7]:
         draw_rect(x, 522.0, 0.6, 104.0, fill_color=c_dark_grey)
-    # Draw bottom border
     draw_rect(212.9, 625.4, 311.8, 0.6, fill_color=c_dark_grey)
 
     pdf_output = pdf.output(dest='S')
     
-    # Windows File Lock Cleanup
     for f in temp_files:
         try:
             os.unlink(f)
@@ -2515,7 +3066,7 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
 
 
 # 3. BERECHNUNG & ANZEIGE
-if start_button:
+if st.session_state.get("lauf_auswertung_gestartet", False):
     raw_speeds = st.session_state.df_lauftest_input["v (m/s)"].values
     raw_lactate = st.session_state.df_lauftest_input["Laktat"].values
     raw_hr = st.session_state.df_lauftest_input["HF"].values
@@ -2528,6 +3079,7 @@ if start_button:
     ruhe_lac = raw_lactate[0]
     ruhe_hr = raw_hr[0]
     abs_vo2max, rel_vo2max = 0.0, 0.0
+    steady_fenster = 120      # steady state window in seconds
     vo2_steady_values = []
     vo2_steady_abs = []      # absoluter VO2-Steady-State [ml/min] je Stufe
     vco2_steady_abs = []     # absoluter VCO2-Steady-State [ml/min] je Stufe
@@ -2544,11 +3096,15 @@ if start_button:
 
     if uploaded_file is not None:
         try:
-            df_excel = pd.read_csv(uploaded_file, header=None, low_memory=False) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, header=None)
-            times_sec = df_excel.iloc[3:, 9].apply(parse_time_to_seconds)
-            vo2_col = pd.to_numeric(df_excel.iloc[3:, 13], errors='coerce')
-            vco2_col = pd.to_numeric(df_excel.iloc[3:, 14], errors='coerce')
-            spiro_df = pd.DataFrame({'Time': times_sec, 'VO2': vo2_col, 'VCO2': vco2_col}).dropna(subset=['Time'])
+            if "lauftest_spiro_df" in st.session_state:
+                spiro_df = st.session_state.lauftest_spiro_df
+            else:
+                df_excel = pd.read_csv(uploaded_file, header=None, low_memory=False) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, header=None)
+                times_sec = df_excel.iloc[3:, 9].apply(parse_time_to_seconds)
+                vo2_col = pd.to_numeric(df_excel.iloc[3:, 13], errors='coerce')
+                vco2_col = pd.to_numeric(df_excel.iloc[3:, 14], errors='coerce')
+                spiro_df = pd.DataFrame({'Time': times_sec, 'VO2': vo2_col, 'VCO2': vco2_col}).dropna(subset=['Time'])
+                st.session_state.lauftest_spiro_df = spiro_df
 
             # --- Zeitintervall automatisch erkennen ---
             if len(spiro_df) >= 2:
@@ -2573,8 +3129,15 @@ if start_button:
                 stage_sec = int(stufendauer * 60)
                 pause_sec = int(pausendauer)
                 for i in range(anzahl):
-                    end_t = vorlauf + (i + 1) * stage_sec + i * pause_sec
+                    if "detected_stage_ends" in st.session_state and i < len(st.session_state.detected_stage_ends):
+                        end_t_base = st.session_state.detected_stage_ends[i]
+                    else:
+                        end_t_base = vorlauf + (i + 1) * stage_sec + i * pause_sec
+                    
+                    end_t_val = st.session_state.get(f"lauftest_end_t_{i}", end_t_base)
+                    end_t = float(end_t_val)
                     start_t = end_t - steady_fenster
+                    
                     mask = (spiro_df['Time'] >= start_t) & (spiro_df['Time'] <= end_t)
                     window_coords.append((start_t, end_t))
                     stage_data = spiro_df.loc[mask]
@@ -2611,33 +3174,13 @@ if start_button:
     poly_func_with = np.poly1d(poly_coeffs_with)
 
     # 2. OBLA 4.0 (ANS)
-    fitted_lactate_with = poly_func_with(speed_with_ruhe)
-    
-    def retrieve_intensity(target_lac, speeds, fitted_lac):
-        n = len(fitted_lac)
-        # Find where lactate curve starts to increase again after going down
-        start_increasing = 0
-        for i in range(1, n):
-            if fitted_lac[i] - fitted_lac[i-1] < 0:
-                start_increasing = i
+    if 4.0 < lactate[0] or 4.0 > lactate[-1]:
+        v_exact_40 = None
+    else:
+        v_exact_40 = np.interp(4.0, lactate, speed)
         
-        fit_slice = fitted_lac[start_increasing:]
-        speed_slice = speeds[start_increasing:]
-        
-        if len(fit_slice) < 2:
-            return None
-            
-        sort_idx = np.argsort(fit_slice)
-        fit_sorted = fit_slice[sort_idx]
-        speed_sorted = speed_slice[sort_idx]
-        
-        if target_lac < fit_sorted[0] or target_lac > fit_sorted[-1]:
-            return None
-        return np.interp(target_lac, fit_sorted, speed_sorted)
-        
-    v_exact_40 = retrieve_intensity(4.0, speed_with_ruhe, fitted_lactate_with)
     if v_exact_40 is not None:
-        results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': round(v_exact_40, 1), 'Laktat': 4.0})
+        results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': v_exact_40, 'Laktat': 4.0})
     else:
         results.append({'Modell': 'OBLA 4.0 (ANS)', 'v': 'Laktatwerte zu niedrig um OBLA zu kalkulieren', 'Laktat': None})
 
@@ -2649,7 +3192,7 @@ if start_button:
     valid_d_roots = [r.real for r in d_roots if np.isreal(r) and speed[0] <= r.real <= speed[-1]]
     if valid_d_roots:
         v_exact_dmax = max(valid_d_roots)
-        results.append({'Modell': 'Dmax (Standard)', 'v': round(v_exact_dmax, 1), 'Laktat': poly_func_no(v_exact_dmax)})
+        results.append({'Modell': 'Dmax (Standard)', 'v': v_exact_dmax, 'Laktat': poly_func_no(v_exact_dmax)})
     else:
         results.append({'Modell': 'Dmax (Standard)', 'v': 'Kalkulation nicht möglich', 'Laktat': None})
 
@@ -2674,7 +3217,7 @@ if start_button:
         valid_mod_roots = [r.real for r in mod_roots if np.isreal(r) and speed_start <= r.real <= speed[-1]]
         if valid_mod_roots:
             v_exact_mod = max(valid_mod_roots)
-            results.append({'Modell': 'Modified Dmax', 'v': round(v_exact_mod, 1), 'Laktat': poly_func_no(v_exact_mod)})
+            results.append({'Modell': 'Modified Dmax', 'v': v_exact_mod, 'Laktat': poly_func_no(v_exact_mod)})
         else:
             results.append({'Modell': 'Modified Dmax', 'v': 'Kalkulation nicht möglich', 'Laktat': None})
 
@@ -2728,8 +3271,8 @@ if start_button:
         lac_ltp1 = poly_func_with(v_exact_ltp1)
         lac_ltp2 = poly_func_with(v_exact_ltp2)
         
-        results.append({'Modell': 'LTP1', 'v': round(v_exact_ltp1, 1), 'Laktat': lac_ltp1})
-        results.append({'Modell': 'LTP2', 'v': round(v_exact_ltp2, 1), 'Laktat': lac_ltp2})
+        results.append({'Modell': 'LTP1', 'v': v_exact_ltp1, 'Laktat': lac_ltp1})
+        results.append({'Modell': 'LTP2', 'v': v_exact_ltp2, 'Laktat': lac_ltp2})
     except Exception as e:
         pass
 
@@ -2747,6 +3290,7 @@ if start_button:
     m1.metric("Gewicht", f"{weight} kg")
     with m3:
         st.metric("VO2max (rel)", f"{rel_vo2max:.1f} ml/min/kg")
+        st.metric("VO2max (abs.)", f"{int(abs_vo2max)} ml/min")
         if spiro_interval_note:
             st.caption(f"⚠️ {spiro_interval_note}")
     m4.metric("Stufenanzahl", f"{anzahl}")
@@ -2807,15 +3351,172 @@ if start_button:
         df_res_list.append(row)
 
     df_res = pd.DataFrame(df_res_list)
+    
+    # 1. Determine active threshold model name
+    selected_model_name = "OBLA 4.0 (ANS)"
+    if "Neues Protokoll" in test_type:
+        selected_model_name = st.session_state.get("selected_threshold_model_widget", "OBLA 4.0 (ANS)")
+        
+    # 2. Extract v_ans and vla_val for downstream calculations
+    v_ans = 3.5
+    vla_val = 0.6
+    if not df_res.empty:
+        selected_row = df_res[df_res['Modell'].str.contains(selected_model_name, na=False, case=False)]
+        if selected_row.empty:
+            selected_row = df_res[df_res['Modell'].str.contains('OBLA 4.0', na=False)]
+        if not selected_row.empty:
+            v_val = selected_row.iloc[0]['v']
+            if not isinstance(v_val, str) and pd.notna(v_val):
+                v_ans = float(v_val)
+            vla_raw = selected_row.iloc[0]['VLamax [mmol/l/s]']
+            if pd.notna(vla_raw) and vla_raw != 'N/A' and 'bitte' not in str(vla_raw).lower():
+                try:
+                    vla_val = float(vla_raw)
+                except ValueError:
+                    pass
+
+    # 3. Reorder df_res to put the active model row at the very top (index 0)
+    if not df_res.empty:
+        selected_idx = df_res[df_res['Modell'].str.contains(selected_model_name, na=False, case=False)].index
+        if not selected_idx.empty:
+            idx = selected_idx[0]
+            df_res = pd.concat([df_res.iloc[[idx]], df_res.drop(idx)]).reset_index(drop=True)
+
+    # 4. Coaching Potential Override Simulation
+    def parse_sel_pct(sel_str):
+        if "+2" in sel_str: return 0.02
+        if "+5" in sel_str: return 0.05
+        if "-2" in sel_str: return -0.02
+        if "-5" in sel_str: return -0.05
+        return 0.0
+
+    vo2_change = parse_sel_pct(st.session_state.get("pot_vo2_select_key_lauft", "Keine Änderung"))
+    vla_change = parse_sel_pct(st.session_state.get("pot_vla_select_key_lauft", "Keine Änderung"))
+    ans_change = parse_sel_pct(st.session_state.get("pot_ans_select_key_lauft", "Keine Änderung"))
+
+    pot_vo2max = rel_vo2max * (1.0 + vo2_change)
+    pot_vlamax = vla_val * (1.0 + vla_change)
+
+    has_spiro = (uploaded_file is not None) and (len(vo2_steady_abs) > 0)
+    if has_spiro:
+        try:
+            vo2_rest = 3.5 * weight
+            ac_stages = []
+            for v, vo2, vco2 in zip(speed, vo2_steady_abs, vco2_steady_abs):
+                if v <= 0 or vo2 <= 0:
+                    ac_stages.append(0.0)
+                    continue
+                net_vo2 = max(0.0, vo2 - vo2_rest)
+                rq = vco2 / vo2 if vco2 > 0 else 0.85
+                kal_equiv = (rq - 0.7) * 5.094 + 19.6
+                ee_kJ_min = (net_vo2 / 1000.0) * kal_equiv
+                vo2_100kh = ee_kJ_min / 21.1 * 1000.0
+                ac = vo2_100kh / (v * 100.0)
+                ac_stages.append(ac)
+
+            ex_speeds = [v for v in speed if v > 0]
+            if len(ex_speeds) >= 2:
+                v_grid = np.arange(2.6, 8.61, 0.01)
+                ac_grid = []
+                for v in v_grid:
+                    if v <= ex_speeds[0]:
+                        m = (ac_stages[1] - ac_stages[0]) / (ex_speeds[1] - ex_speeds[0])
+                        c_val = ac_stages[0] - m * ex_speeds[0]
+                        ac = m * v + c_val
+                    elif v >= ex_speeds[-1]:
+                        m = (ac_stages[-1] - ac_stages[-2]) / (ex_speeds[-1] - ex_speeds[-2])
+                        c_val = ac_stages[-1] - m * ex_speeds[-1]
+                        ac = m * v + c_val
+                    else:
+                        for i in range(len(ex_speeds) - 1):
+                            if ex_speeds[i] <= v < ex_speeds[i+1]:
+                                m = (ac_stages[i+1] - ac_stages[i]) / (ex_speeds[i+1] - ex_speeds[i])
+                                c_val = ac_stages[i] - m * ex_speeds[i]
+                                ac = m * v + c_val
+                                break
+                    ac_grid.append(ac)
+                ac_grid = np.array(ac_grid)
+
+                # Improve running economy if ANS is overridden
+                eco_factor = 1.0 / (1.0 + ans_change)
+                pot_ac_grid = ac_grid * eco_factor
+
+                pot_vo2_rel_demand_grid = (pot_ac_grid * v_grid * 100.0) / weight + 1.0
+                pot_delta_vo2_grid = pot_vo2max - pot_vo2_rel_demand_grid
+
+                pot_lac_clear_grid = (0.02049 * pot_vo2_rel_demand_grid) / 0.4
+                pot_net_clearance = np.full_like(v_grid, -9999.0)
+                pot_carb_pct_grid = np.zeros_like(v_grid)
+
+                ks1, ks2 = 0.0631, 1.331
+                for idx, (v, vo2_rel, d_vo2) in enumerate(zip(v_grid, pot_vo2_rel_demand_grid, pot_delta_vo2_grid)):
+                    if d_vo2 > 0 and vo2_rel > 0:
+                        adp = np.sqrt((ks1 * vo2_rel) / d_vo2)
+                        adp_3 = adp ** 3
+                        pfk = 1 + (ks2 / adp_3)
+                        vla_min = pot_vlamax * 60 / pfk
+                        pot_net_clearance[idx] = pot_lac_clear_grid[idx] - vla_min
+                        fat_pct = max(0.0, min(100.0, 100.0 - (vla_min / pot_lac_clear_grid[idx] * 100.0)))
+                        pot_carb_pct_grid[idx] = 100.0 - fat_pct
+                    else:
+                        pot_net_clearance[idx] = -9999.0
+                        pot_carb_pct_grid[idx] = 100.0
+
+                pot_ans_idx = None
+                for idx in range(len(v_grid)):
+                    if pot_net_clearance[idx] < 0 and idx > 0 and pot_net_clearance[idx-1] >= 0:
+                        pot_ans_idx = idx - 1
+                        break
+                if pot_ans_idx is None:
+                    pot_ans_idx = np.argmin(np.abs(pot_net_clearance))
+
+                pot_v_ans = v_grid[pot_ans_idx]
+
+                pot_fatmax_idx = np.argmax(pot_net_clearance)
+                pot_v_fatmax = v_grid[pot_fatmax_idx]
+
+                pot_rq_grid = 0.7 + 0.3 * (pot_carb_pct_grid / 100.0)
+                pot_kal_equiv_grid = (pot_rq_grid - 0.7) * 5.094 + 19.6
+                pot_ee_kcal_h_grid = (((pot_vo2_rel_demand_grid * weight / 1000.0) * pot_kal_equiv_grid) * 60.0) / 4.186
+                pot_carb_g_h_grid = (pot_ee_kcal_h_grid * (pot_carb_pct_grid / 100.0)) / 4.063
+
+                pot_match_idx = np.argmin(np.abs(pot_carb_g_h_grid - 45.0))
+                pot_v_match = v_grid[pot_match_idx]
+            else:
+                pot_v_ans = v_ans * (1.0 + ans_change)
+                pot_v_fatmax = pot_v_ans * 0.78
+                pot_v_match = pot_v_ans * 0.85
+        except:
+            pot_v_ans = v_ans * (1.0 + ans_change)
+            pot_v_fatmax = pot_v_ans * 0.78
+            pot_v_match = pot_v_ans * 0.85
+    else:
+        pot_v_ans = v_ans * (1.0 + ans_change)
+        pot_v_fatmax = pot_v_ans * 0.78
+        pot_v_match = pot_v_ans * 0.85
+
+    st.session_state.pot_weight_val = weight
+    st.session_state.pot_vo2max = pot_vo2max
+    st.session_state.pot_vlamax = pot_vlamax
+    st.session_state.pot_ans_rel = pot_v_ans
+    st.session_state.pot_fatmax = pot_v_fatmax
+    st.session_state.pot_match = pot_v_match
+    st.session_state.pot_fat = body_fat_pct
+
     poly_func = poly_func_no
     fig_laktat = None
-
 
     if not df_res.empty:
         c1, c2 = st.columns([1, 1])
         with c1:
             st.subheader("Schwellen & VLamax Matrix")
-            st.dataframe(df_res[['Modell', 'm/s', 'km/h', 'Laktat', 'HF', 'VLamax [mmol/l/s]']], hide_index=True, width='stretch')
+            # Style the active threshold row (index 0) with a light gray background and bold text
+            styled_df = df_res[['Modell', 'm/s', 'km/h', 'Laktat', 'HF', 'VLamax [mmol/l/s]']]
+            def make_row_gray_bold(row):
+                if row.name == 0:
+                    return ['background-color: #f0f2f6; font-weight: bold; color: #1a1a1a;'] * len(row)
+                return [''] * len(row)
+            st.dataframe(styled_df.style.apply(make_row_gray_bold, axis=1), hide_index=True, width='stretch')
         with c2:
             fig, ax = plt.subplots(figsize=(8, 4))
             v_smooth = np.linspace(v_start, v_end, 200)
@@ -2850,7 +3551,6 @@ if start_button:
 
             # RQ
             rq_val = (vco2_a / vo2_a) if (vco2_a > 0 and vo2_a > 0) else None
-            rq_val = max(0.7, min(1.0, rq_val)) if rq_val else None
 
             # VLamax je Stufe via bestehender Funktion
             vla_stage = None
@@ -2966,11 +3666,44 @@ if start_button:
     with st.expander("Experten Tools zum Vergleich mit einer bestehenden HYCYS Diagnostik"):
         if not spiro_df.empty:
             st.subheader("Spiro-Synchronisation & Rohdaten")
-            fig2, ax2 = plt.subplots(figsize=(12, 4))
-            ax2.plot(spiro_df['Time'], spiro_df['VO2'], color='gray', alpha=0.5)
+            import plotly.graph_objects as go
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=spiro_df['Time'],
+                y=spiro_df['VO2'],
+                mode='lines+markers',
+                name='VO2',
+                line=dict(color='gray', width=1.5),
+                marker=dict(size=4),
+                hovertemplate='Zeit: %{x}s<br>VO2: %{y:.1f} ml/min<extra></extra>'
+            ))
+            
+            shapes = []
             for i, (s_t, e_t) in enumerate(window_coords):
-                ax2.axvspan(s_t, e_t, color='#00a1e0', alpha=0.3)
-            st.pyplot(fig2)
+                shapes.append(dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=s_t,
+                    y0=0,
+                    x1=e_t,
+                    y1=1,
+                    fillcolor="#00a1e0",
+                    opacity=0.3,
+                    layer="below",
+                    line_width=0,
+                ))
+            
+            fig2.update_layout(
+                xaxis=dict(title=dict(text="Zeit (s)")),
+                yaxis=dict(title=dict(text="VO2 (ml/min)")),
+                shapes=shapes,
+                height=350,
+                margin=dict(l=60, r=60, t=20, b=50),
+                plot_bgcolor='#f9f9f9',
+                showlegend=False
+            )
+            st.plotly_chart(fig2, use_container_width=True)
             
             col_diag1, col_diag2 = st.columns(2)
             with col_diag1:
@@ -2992,7 +3725,7 @@ if start_button:
                 vco2_a = vco2_steady_abs[i] if i < len(vco2_steady_abs) else 0.0
                 vo2_r  = vo2_steady_values[i]
                 rq_val   = (vco2_a / vo2_a) if (vco2_a > 0 and vo2_a > 0) else None
-                rq_str   = f"{min(1.0, max(0.7, rq_val)):.3f}" if rq_val else '-'
+                rq_str   = f"{rq_val:.3f}" if rq_val else '-'
                 re_kg_km = (vo2_r / (v_ms * 3.6) * 60.0) if (vo2_r > 0 and v_ms > 0) else None
                 step_data.append({
                     "Stufe":              f"{i+1}",

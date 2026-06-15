@@ -22,7 +22,8 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
                    coach, sportart, kategorie, height, slope_val, intercept_val, hfmax_val,
                    df_sim, sprint_times, sprint_powers, sprint_cadences,
                    avg_sprint_power, max_sprint_power, max_force, force_at_pmax, force_pct_max,
-                   pot_vo2max, pot_fat, pot_ans_abs, pot_ans_rel, pot_fatmax, pot_pmax, pot_match, pot_vlamax):
+                   pot_vo2max, pot_fat, pot_ans_abs, pot_ans_rel, pot_fatmax, pot_pmax, pot_match, pot_vlamax,
+                   gender="männlich"):
 
     pdf = FPDF(unit='pt')
     pdf.set_auto_page_break(auto=False)
@@ -172,20 +173,31 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
     draw_text_centered(197.89, 249.0, f"{100.0 - body_fat_pct:.1f} %".replace('.', ','), size=7.6, font_style='B', color=c_dark_grey)
 
     # Pie chart (right half of page 2)
-    fig, ax = plt.subplots(figsize=(3.856, 2.0), dpi=200)
+    fig, ax = plt.subplots(figsize=(3.856, 2.0), dpi=300)
     pct_fett = max(0.1, body_fat_pct)
     pct_frei = max(0.1, 100.0 - body_fat_pct)
     wedges, texts, autotexts = ax.pie(
         [pct_fett, pct_frei],
+        explode=(0.12, 0),
         colors=['#2cb7b9', '#cdb663'],
         autopct=lambda p: f"{p:.1f} %".replace('.', ','),
         startangle=90,
-        pctdistance=0.60,
+        counterclock=False,
+        pctdistance=0.50,
         textprops=dict(size=8, weight='bold', color='white'),
         wedgeprops=dict(edgecolor='white', linewidth=2),
     )
-    for at in autotexts:
-        at.set_color('white')
+    
+    # Custom adjustment for label positioning to center it radially inside the exploded slice
+    for i, (wedge, autotext) in enumerate(zip(wedges, autotexts)):
+        theta = np.deg2rad(wedge.theta1 + (wedge.theta2 - wedge.theta1) / 2.0)
+        e = 0.12 if i == 0 else 0.0
+        d = 0.65 if i == 0 else 0.50  # Fett (wedge 0) moved further out (0.65) where the slice is wider
+        x = (e + d) * np.cos(theta)
+        y = (e + d) * np.sin(theta)
+        autotext.set_position((x, y))
+        autotext.set_color('white')
+
     ax.axis('equal')
     # Manual legend matching reference
     handles = [Patch(color='#2cb7b9', label='Fett'), Patch(color='#cdb663', label='Fettfrei')]
@@ -237,7 +249,7 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
                        size=8.2, font_style='B', color=c_white)
 
     max_x = float(np.ceil((ans_power + 10.0) / 25.0) * 25.0)
-    fig, ax = plt.subplots(figsize=(6.4, 3.6), dpi=200)
+    fig, ax = plt.subplots(figsize=(7.4286, 3.6), dpi=300)
     ax.plot(df_sim['power'], df_sim['vo2ss'] * weight,
             color='#595a59', linewidth=2.5, label='Sauerstoffaufnahme - VO₂')
     ax.set_ylabel('VO₂ [ml/min]', color='#595a59', fontsize=7, fontweight='bold')
@@ -357,7 +369,7 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
                        size=8.2, font_style='B', color=c_white)
 
     max_x = float(np.ceil((ans_power + 10.0) / 25.0) * 25.0)
-    fig, ax = plt.subplots(figsize=(6.4, 3.6), dpi=200)
+    fig, ax = plt.subplots(figsize=(7.5647, 3.6), dpi=300)
     ax.plot(df_sim['power'], df_sim['ee_gesamt'], color='#595a59', linewidth=2.5,
             label='Gesamtenergieverbrauch')
     ax.plot(df_sim['power'], df_sim['ee_fett'],   color='#2cb7b9', linewidth=2.5,
@@ -428,18 +440,86 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
     draw_rect(57.6, 127.8, 155.3, 10.44, fill_color=c_teal)
     draw_text_centered(135.3, 129.0, "Referenzdaten", size=8.2, font_style='B', color=c_white)
 
-    def normalize_ref(val, cat):
-        ref_params = {
-            'ANS abs. [W]':             (325.0, 40.0,  False),
-            'Fettanteil [%]':           (13.0,  2.5,   True),
-            'VO2max [ml/min/kg]':       (67.0,  4.5,   False),
-            'VLamax [mmol/L/s]':        (0.6,   0.1,   True),
-            'KH-Match [W/kg]':          (3.3,   0.3,   False),
-            'Maximale Leistung [W/kg]': (15.0,  2.0,   False),
-            'Fatmax [W/kg]':            (3.1,   0.3,   False),
-            'ANS rel. [W/kg]':          (4.2,   0.45,  False),
+    # Map category
+    cat_key = "Hobby" if kategorie in ["Hobby", "Age-Grouper"] else kategorie
+    if cat_key not in ["Hobby", "Amateur", "Profi"]:
+        cat_key = "Amateur" # fallback
+
+    # Determine gender key
+    gender_key = "weiblich" if gender == "weiblich" else "männlich"
+
+    # Reference values lookup matching "Reference data" sheet exactly
+    ref_table = {
+        "männlich": {
+            "Hobby": {
+                'ANS abs. [W]':             (245.0, 20.0,  False),
+                'Fettanteil [%]':           (14.0,  2.0,   True),
+                'VO2max [ml/min/kg]':       (56.0,  4.0,   False),
+                'VLamax [mmol/L/s]':        (0.7,   0.1,   True),
+                'KH-Match [W/kg]':          (2.5,   0.2,   False),
+                'Maximale Leistung [W/kg]': (12.0,  2.0,   False),
+                'Fatmax [W/kg]':            (2.4,   0.2,   False),
+                'ANS rel. [W/kg]':          (3.4,   0.3,   False),
+            },
+            "Amateur": {
+                'ANS abs. [W]':             (325.0, 40.0,  False),
+                'Fettanteil [%]':           (13.0,  2.5,   True),
+                'VO2max [ml/min/kg]':       (67.0,  4.5,   False),
+                'VLamax [mmol/L/s]':        (0.6,   0.1,   True),
+                'KH-Match [W/kg]':          (3.3,   0.3,   False),
+                'Maximale Leistung [W/kg]': (15.0,  2.0,   False),
+                'Fatmax [W/kg]':            (3.1,   0.3,   False),
+                'ANS rel. [W/kg]':          (4.2,   0.45,  False),
+            },
+            "Profi": {
+                'ANS abs. [W]':             (350.0, 40.0,  False),
+                'Fettanteil [%]':           (11.0,  2.5,   True),
+                'VO2max [ml/min/kg]':       (70.0,  4.5,   False),
+                'VLamax [mmol/L/s]':        (0.5,   0.1,   True),
+                'KH-Match [W/kg]':          (3.9,   0.5,   False),
+                'Maximale Leistung [W/kg]': (18.0,  2.0,   False),
+                'Fatmax [W/kg]':            (3.8,   0.5,   False),
+                'ANS rel. [W/kg]':          (4.7,   0.45,  False),
+            }
+        },
+        "weiblich": {
+            "Hobby": {
+                'ANS abs. [W]':             (150.0, 20.0,  False),
+                'Fettanteil [%]':           (20.0,  2.0,   True),
+                'VO2max [ml/min/kg]':       (42.0,  4.0,   False),
+                'VLamax [mmol/L/s]':        (0.7,   0.1,   True),
+                'KH-Match [W/kg]':          (1.65,  0.2,   False),
+                'Maximale Leistung [W/kg]': (9.0,   1.8,   False),
+                'Fatmax [W/kg]':            (1.55,  0.3,   False),
+                'ANS rel. [W/kg]':          (2.2,   0.3,   False),
+            },
+            "Amateur": {
+                'ANS abs. [W]':             (170.0, 40.0,  False),
+                'Fettanteil [%]':           (17.0,  2.5,   True),
+                'VO2max [ml/min/kg]':       (50.0,  4.5,   False),
+                'VLamax [mmol/L/s]':        (0.6,   0.1,   True),
+                'KH-Match [W/kg]':          (2.05,  0.3,   False),
+                'Maximale Leistung [W/kg]': (12.0,  1.8,   False),
+                'Fatmax [W/kg]':            (1.92,  0.5,   False),
+                'ANS rel. [W/kg]':          (2.6,   0.6,   False),
+            },
+            "Profi": {
+                'ANS abs. [W]':             (190.0, 40.0,  False),
+                'Fettanteil [%]':           (13.0,  3.0,   True),
+                'VO2max [ml/min/kg]':       (56.0,  4.5,   False),
+                'VLamax [mmol/L/s]':        (0.5,   0.1,   True),
+                'KH-Match [W/kg]':          (2.8,   0.5,   False),
+                'Maximale Leistung [W/kg]': (15.0,  1.8,   False),
+                'Fatmax [W/kg]':            (2.83,  0.6,   False),
+                'ANS rel. [W/kg]':          (3.5,   0.45,  False),
+            }
         }
-        mean, sd, inverted = ref_params[cat]
+    }
+
+    category_params = ref_table[gender_key][cat_key]
+
+    def normalize_ref(val, cat):
+        mean, sd, inverted = category_params[cat]
         span = 6 * sd
         if span == 0:
             return 0.0
@@ -523,7 +603,7 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
     # Add text labels manually
     for i, label in enumerate(radar_labels):
         t = angles[i]
-        r_label = 112
+        r_label = 108
         x = r_label * np.cos(t)
         y = r_label * np.sin(t)
         
@@ -548,8 +628,8 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
         ax.text(x, y, label, fontsize=6.0, fontweight='bold', color='#595a59', ha=ha, va=va)
 
     ax.axis('off')
-    ax.set_xlim(-140, 140)
-    ax.set_ylim(-140, 140)
+    ax.set_xlim(-130, 130)
+    ax.set_ylim(-130, 130)
 
     legend_handles = [
         Patch(facecolor='#cdb663', alpha=1.0,  label='Sehr gut'),
@@ -579,7 +659,7 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
         new_img.paste(img, ((max_dim - w_img) // 2, (max_dim - h_img) // 2))
         new_img.save(tmp.name)
         
-        pdf.image(tmp.name, x=160.76, y=143.52, w=250.0, h=250.0)
+        pdf.image(tmp.name, x=158.0, y=144.0, w=265.0, h=265.0)
         temp_files.append(tmp.name)
 
     # Training zones table
@@ -622,21 +702,42 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
     k3_min  = ans_power * 0.84
     k3_max  = ans_power * 0.98
 
+    # Calculate heart rates at boundaries
+    hr_kb_max = hr_at_p(kb_max)
+    hr_g1_min = hr_at_p(g1_min)
+    hr_g1_max = hr_at_p(g1_max)
+    hr_g2_min = hr_at_p(g2_min)
+    hr_g2_max = hr_at_p(g2_max)
+    hr_eb_min = hr_at_p(eb_min)
+    hr_eb_max = hr_at_p(eb_max)
+    hr_sb_min = hr_at_p(sb_min)
+    hr_sb_max = hfmax_val # displayed as "max"
+    hr_k3_min = hr_at_p(k3_min)
+    hr_k3_max = hr_at_p(k3_max)
+
+    # Calculate target heart rates as exactly the middle of each HR zone range
+    hr_kb_zl = int(round((hr_at_p(0.0) + hr_kb_max) / 2.0))
+    hr_g1_zl = int(round((hr_g1_min + hr_g1_max) / 2.0))
+    hr_g2_zl = int(round((hr_g2_min + hr_g2_max) / 2.0))
+    hr_eb_zl = int(round((hr_eb_min + hr_eb_max) / 2.0))
+    hr_sb_zl = int(round((hr_sb_min + hr_sb_max) / 2.0))
+    hr_k3_zl = int(round((hr_k3_min + hr_k3_max) / 2.0))
+
     def rnd(v): return int(round(v / 10) * 10)
 
     zones = [
-        ("Kompensationsbereich (KB)", "-",         rnd(kb_max), rnd(kb_max*0.9),
-         "-",              hr_at_p(kb_max),  hr_at_p(kb_max*0.9),  "80-100"),
-        ("Grundlagenausdauer 1 (G1)", rnd(g1_min), rnd(g1_max), g1_zl,
-         hr_at_p(g1_min), hr_at_p(g1_max),  hr_at_p(g1_zl),       "85-110"),
-        ("Grundlagenausdauer 2 (G2)", rnd(g2_min), rnd(g2_max), rnd(ans_power*0.86),
-         hr_at_p(g2_min), hr_at_p(g2_max),  hr_at_p(ans_power*0.86), "85-110"),
-        ("Entwicklungsbereich (EB)",  rnd(eb_min), rnd(eb_max), rnd(ans_power),
-         hr_at_p(eb_min), hr_at_p(eb_max),  hr_at_p(ans_power),   "85-110"),
-        ("Spitzenbereich (SB)",       rnd(sb_min), rnd(sb_max), rnd(map_val*1.075),
-         hr_at_p(sb_min), "max",             hr_at_p(map_val*1.075), "95-120"),
-        ("Kraftausdauer (K3)",        rnd(k3_min), rnd(k3_max), rnd(ans_power*0.92),
-         hr_at_p(k3_min), hr_at_p(k3_max),  hr_at_p(ans_power*0.92), "40-60"),
+        ("Kompensationsbereich (KB)", "-",         rnd(kb_max), rnd(kb_max / 2.0),
+         "-",              hr_kb_max,        hr_kb_zl,             "80-100"),
+        ("Grundlagenausdauer 1 (G1)", rnd(g1_min), rnd(g1_max), rnd((g1_min + g1_max) / 2.0),
+         hr_g1_min,        hr_g1_max,        hr_g1_zl,             "85-110"),
+        ("Grundlagenausdauer 2 (G2)", rnd(g2_min), rnd(g2_max), rnd((g2_min + g2_max) / 2.0),
+         hr_g2_min,        hr_g2_max,        hr_g2_zl,             "85-110"),
+        ("Entwicklungsbereich (EB)",  rnd(eb_min), rnd(eb_max), rnd((eb_min + eb_max) / 2.0),
+         hr_eb_min,        hr_eb_max,        hr_eb_zl,             "85-110"),
+        ("Spitzenbereich (SB)",       rnd(sb_min), rnd(sb_max), rnd((sb_min + sb_max) / 2.0),
+         hr_sb_min,        "max",            hr_sb_zl,             "95-120"),
+        ("Kraftausdauer (K3)",        rnd(k3_min), rnd(k3_max), rnd((k3_min + k3_max) / 2.0),
+         hr_k3_min,        hr_k3_max,        hr_k3_zl,             "40-60"),
     ]
 
     y_row = 466.2
@@ -749,7 +850,7 @@ def create_pdf_rad(athlete_name, birthdate, test_date, test_type, weight, body_f
     draw_text(176.3, 565.9, f_pct_str,                 size=7.6, color=c_black)
 
     # Sprint Power vs Time chart
-    fig, ax = plt.subplots(figsize=(3.9, 2.5), dpi=200)
+    fig, ax = plt.subplots(figsize=(4.4444, 2.5), dpi=300)
     ax.plot(sprint_times, sprint_powers, color='#595a59', linewidth=2.5)
     try:
         if t_alak > 0 and t_bel > t_alak:
