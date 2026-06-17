@@ -2755,7 +2755,12 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
     fig, ax = plt.subplots(figsize=(6, 3.2), dpi=300)
     ax.set_xlabel('Geschwindigkeit [m/s]', color='#595a59', fontsize=6, fontweight='bold')
     ax.set_ylabel('Energie [kcal/h]', color='#595a59', fontsize=6, fontweight='bold')
-    ax.set_xlim(speed[0]*0.95, speed[-1]*1.05)
+    
+    v_start = speed[0]
+    v_end = speed[-1]
+    x_lo = v_start * 0.95
+    x_hi = v_end * 1.05
+    ax.set_xlim(x_lo, x_hi)
     
     ax2 = ax.twinx()
     ax2.set_ylabel('Kohlenhydratverbrauch [g/h]', color='#595a59', fontsize=6, fontweight='bold')
@@ -2765,17 +2770,68 @@ def create_pdf(athlete_name, birthdate, test_date, test_type, weight, body_fat_p
         ax.plot(v_grid, ee_fat_kcal_h_grid, color='#2cb7b9', linewidth=2.5)
         ax2.plot(v_grid, carb_g_h_grid, color='#cdb663', linewidth=2.5, linestyle='-')
         
-        if fatmax_speed > 0:
+        if fatmax_speed > 0 and x_lo <= fatmax_speed <= x_hi:
             ax.axvspan(fatmax_speed - 0.1, fatmax_speed + 0.1, color='#2cb7b9', alpha=0.25)
-            ax.text(fatmax_speed, max(ee_kcal_h_grid)*0.5, "Fatmax", color='white', fontsize=6, fontweight='bold', ha='center', va='center', bbox=dict(boxstyle='square,pad=0.2', facecolor='#2cb7b9', edgecolor='none'))
-            
-        ax.set_ylim(0, max(ee_kcal_h_grid)*1.1)
-        ax2.set_ylim(0, max(carb_g_h_grid)*1.1)
         
+        # Compute Y-axis limits based on the VISIBLE speed range only
+        import math
+        vis_mask = (v_grid >= x_lo) & (v_grid <= x_hi)
+        vis_ee = ee_kcal_h_grid[vis_mask]
+        vis_fat = ee_fat_kcal_h_grid[vis_mask]
+        vis_carb = carb_g_h_grid[vis_mask]
+        
+        y1_data_max = max(vis_ee.max(), vis_fat.max())
+        y2_data_max = vis_carb.max()
+        
+        # Round up to nice tick values with ~10% headroom
+        y1_step = 100 if y1_data_max < 1500 else 200 if y1_data_max < 3000 else 500
+        y1_max = math.ceil(y1_data_max * 1.12 / y1_step) * y1_step
+        
+        y2_step = 50 if y2_data_max < 400 else 100 if y2_data_max < 800 else 200
+        y2_max = math.ceil(y2_data_max * 1.12 / y2_step) * y2_step
+        
+        ax.set_ylim(0, y1_max)
+        ax2.set_ylim(0, y2_max)
+        
+        # --- Smart label positioning ---
+        # Evaluate curve values at representative x-positions for label placement
         bbox_props = dict(boxstyle='square,pad=0.2', facecolor='white', edgecolor='none', alpha=1.0)
-        ax.text(0.34, 0.57, 'Gesamtenergieverbrauch', color='#595a59', fontsize=6.5, fontweight='bold', ha='center', va='center', transform=ax.transAxes, bbox=bbox_props, zorder=10)
-        ax.text(0.26, 0.45, 'Verbrauch von Fetten', color='#2cb7b9', fontsize=6.5, fontweight='bold', ha='center', va='center', transform=ax.transAxes, bbox=bbox_props, zorder=10)
-        ax2.text(0.70, 0.65, 'Kohlenhydratverbrauch', color='#cdb663', fontsize=6.5, fontweight='bold', ha='center', va='center', transform=ax2.transAxes, bbox=bbox_props, zorder=10)
+        
+        # Fatmax label: place at the fatmax speed if visible
+        if fatmax_speed > 0 and x_lo <= fatmax_speed <= x_hi:
+            fatmax_idx_vis = np.argmin(np.abs(v_grid - fatmax_speed))
+            fatmax_y_pos = ee_fat_kcal_h_grid[fatmax_idx_vis]
+            ax.text(fatmax_speed, fatmax_y_pos * 0.5 if fatmax_y_pos > y1_max * 0.15 else y1_max * 0.08,
+                    "Fatmax", color='white', fontsize=6, fontweight='bold', ha='center', va='center',
+                    bbox=dict(boxstyle='square,pad=0.2', facecolor='#2cb7b9', edgecolor='none'), zorder=12)
+        
+        # Gesamtenergieverbrauch: place at ~60% of x-range, slightly above the total energy curve
+        label_x_frac = 0.6
+        label_v = x_lo + (x_hi - x_lo) * label_x_frac
+        label_idx = np.argmin(np.abs(v_grid - label_v))
+        ee_at_label = ee_kcal_h_grid[label_idx]
+        # Position label above the total energy curve
+        gesamt_y = min(ee_at_label + y1_max * 0.08, y1_max * 0.95)
+        ax.text(label_v, gesamt_y, 'Gesamtenergieverbrauch', color='#595a59', fontsize=6.5,
+                fontweight='bold', ha='center', va='center', bbox=bbox_props, zorder=10)
+        
+        # Verbrauch von Fetten: place at ~35% of x-range, below the fat curve  
+        fat_label_v = x_lo + (x_hi - x_lo) * 0.35
+        fat_label_idx = np.argmin(np.abs(v_grid - fat_label_v))
+        fat_at_label = ee_fat_kcal_h_grid[fat_label_idx]
+        # Position label below the fat curve
+        fat_y = max(fat_at_label - y1_max * 0.08, y1_max * 0.05)
+        ax.text(fat_label_v, fat_y, 'Verbrauch von Fetten', color='#2cb7b9', fontsize=6.5,
+                fontweight='bold', ha='center', va='center', bbox=bbox_props, zorder=10)
+        
+        # Kohlenhydratverbrauch: place at ~75% of x-range, below the carb curve
+        carb_label_v = x_lo + (x_hi - x_lo) * 0.75
+        carb_label_idx = np.argmin(np.abs(v_grid - carb_label_v))
+        carb_at_label = carb_g_h_grid[carb_label_idx]
+        # Position below the carb curve in ax2 coordinates
+        carb_y = max(carb_at_label - y2_max * 0.08, y2_max * 0.05)
+        ax2.text(carb_label_v, carb_y, 'Kohlenhydratverbrauch', color='#cdb663', fontsize=6.5,
+                 fontweight='bold', ha='center', va='center', bbox=bbox_props, zorder=10)
     else:
         ax.set_ylim(0, 1500)
         ax2.set_ylim(0, 400)
